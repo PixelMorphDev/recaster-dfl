@@ -3,16 +3,21 @@
 
 Run from the repo root:  python -m unittest discover -s tests -v
 """
+import contextlib
+import io
 import json
 import sys
 import tempfile
 import threading
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from recaster_bridge import probe as probe_mod  # noqa: E402
 from recaster_bridge import read_version, run_dir_from_env  # noqa: E402
 from recaster_bridge.answers import (POLICY_ASK, POLICY_DEFAULT, Answer, find_answer,  # noqa: E402
                                      load_answers, parse_answers)
@@ -231,6 +236,82 @@ class ControlReaderTests(unittest.TestCase):
             control_mod.MAX_LINE_BYTES = old
         self.assertEqual(self.stops, [(False, "control")])
         self.assertEqual(self.reader.invalid_lines, 1)
+
+
+
+class ProbeDeviceTests(unittest.TestCase):
+    """probe._devices() against a fake core.leras.device (no TensorFlow needed)."""
+
+    def _fake_device_module(self, calls, get_error=None, devices=()):
+        class Devices:
+            @staticmethod
+            def initialize_main_env():
+                calls.append("initialize_main_env")
+
+            @staticmethod
+            def getDevices():
+                calls.append("getDevices")
+                if "initialize_main_env" not in calls:
+                    raise Exception("nn devices are not initialized. Run initialize_main_env() in main process.")
+                if get_error:
+                    raise get_error
+                return list(devices)
+
+        device = types.ModuleType("core.leras.device")
+        device.Devices = Devices
+        leras = types.ModuleType("core.leras")
+        leras.device = device
+        core = types.ModuleType("core")
+        core.leras = leras
+        return {"core": core, "core.leras": leras, "core.leras.device": device}
+
+    def _devices(self, modules, tf_importable=True):
+        stderr = io.StringIO()
+        spec = object() if tf_importable else None
+        with mock.patch.dict(sys.modules, modules), \
+                mock.patch.object(probe_mod.importlib.util, "find_spec", return_value=spec), \
+                contextlib.redirect_stderr(stderr):
+            result = probe_mod._devices()
+        return result, stderr.getvalue()
+
+    def test_initializes_the_device_table_before_reading_it(self):
+        calls = []
+        metal = types.SimpleNamespace(index=0, name="METAL", total_mem_gb=0.0)
+        result, err = self._devices(self._fake_device_module(calls, devices=[metal]))
+        self.assertEqual(calls, ["initialize_main_env", "getDevices"])
+        self.assertEqual(result, [{"index": 0, "name": "METAL", "total_mem_gb": 0.0}])
+        self.assertEqual(err, "")
+
+    def test_no_devices_is_an_empty_list(self):
+        result, _err = self._devices(self._fake_device_module([]))
+        self.assertEqual(result, [])
+
+    def test_failure_falls_back_to_none_and_says_why(self):
+        result, err = self._devices(self._fake_device_module([], get_error=RuntimeError("CUDA driver too old")))
+        self.assertIsNone(result)
+        self.assertIn("device enumeration failed: RuntimeError: CUDA driver too old", err)
+
+    def test_import_failure_falls_back_to_none_and_says_why(self):
+        result, err = self._devices({"core.leras": None})
+        self.assertIsNone(result)
+        self.assertIn("device enumeration failed: ", err)
+
+    def test_skipped_without_tensorflow(self):
+        calls = []
+        result, err = self._devices(self._fake_device_module(calls), tf_importable=False)
+        self.assertIsNone(result)
+        self.assertEqual(calls, [])       # initialize_main_env would block on a dead child
+        self.assertIn("tensorflow is not importable", err)
+
+    def test_probe_enumerates_devices_before_importing_tensorflow(self):
+        order = []
+        with mock.patch.object(probe_mod, "_devices", side_effect=lambda: order.append("devices") or []), \
+                mock.patch.object(probe_mod, "_version", side_effect=lambda name: order.append(name)):
+            info = probe_mod.probe()
+        self.assertEqual(order[0], "devices")
+        self.assertEqual(info["devices"], [])
+        with mock.patch.object(probe_mod, "_devices", side_effect=AssertionError("enumerated")):
+            self.assertIsNone(probe_mod.probe(with_devices=False)["devices"])
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@
 Needs DFL's interact deps (numpy, opencv-python, tqdm, colorama); no
 TensorFlow. ``tests/bridge_stub.py`` stands in for ``main.py <op>``.
 """
+import importlib.util
 import json
 import os
 import signal
@@ -200,6 +201,53 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0 if info["tf_version"] else 1)
         for key in ("python", "numpy", "cv2", "cv2_has_highgui", "onnxruntime_importable"):
             self.assertIn(key, info)
+
+    @unittest.skipUnless(importlib.util.find_spec("tensorflow"), "needs TensorFlow (a runtime env)")
+    def test_probe_lists_devices_with_tensorflow(self):
+        # CUDA_VISIBLE_DEVICES="" like the release smoke: DFL's device init pops it
+        env = dict(_base_env(), CUDA_VISIBLE_DEVICES="", TF_CPP_MIN_LOG_LEVEL="2")
+        proc = subprocess.run([sys.executable, "-u", "-m", "recaster_bridge.probe", "--json"],
+                              cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=600)
+        info = json.loads([line for line in proc.stdout.splitlines() if line.startswith("{")][-1])
+        self.assertIsInstance(info["devices"], list, proc.stderr)
+        for dev in info["devices"]:
+            self.assertEqual(set(dev), {"index", "name", "total_mem_gb"})
+        if sys.platform == "darwin" and importlib.util.find_spec("tensorflow_metal"):
+            self.assertIn("METAL", [d["name"] for d in info["devices"]])
+
+
+class ProbeBrokenTensorflowTests(unittest.TestCase):
+    """A TensorFlow that find_spec() sees but that fails (or crashes) on import must
+    not hang the probe in Devices.initialize_main_env() (QA regression, REC-187)."""
+
+    def _probe_with_fake_tf(self, body, expect_json=True):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "tensorflow").mkdir()
+            (Path(tmp) / "tensorflow" / "__init__.py").write_text(body)
+            env = dict(_base_env(), PYTHONPATH=tmp, PYTHONNOUSERSITE="1")
+            proc = subprocess.Popen([sys.executable, "-u", "-m", "recaster_bridge.probe", "--json"],
+                                    cwd=str(ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    start_new_session=True)
+            try:
+                out, err = proc.communicate(timeout=60)
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.communicate()
+                self.fail("probe hung (> 60 s) with a TensorFlow that fails to import")
+        if not expect_json:
+            return  # a hard crash in the probe's own TF import can't print JSON; it just must not hang
+        lines = [line for line in out.decode().splitlines() if line.startswith("{")]
+        self.assertTrue(lines, err.decode())
+        info = json.loads(lines[-1])
+        self.assertIsNone(info["devices"])
+        self.assertIsNone(info["tf_version"])
+        self.assertIn("device enumeration failed", err.decode())
+
+    def test_tf_import_error(self):
+        self._probe_with_fake_tf('raise ImportError("libcudart.so.12: cannot open shared object file")\n')
+
+    def test_tf_import_crash(self):
+        self._probe_with_fake_tf("import os\nos._exit(245)\n", expect_json=False)
 
 
 if __name__ == "__main__":
