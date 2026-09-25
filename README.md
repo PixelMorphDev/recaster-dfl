@@ -12,16 +12,16 @@ https://arxiv.org/abs/2005.05535</a>
 
 ### the leading software for creating deepfakes
 
-<img src="doc/DFL_welcome.png" align="center">
+<img src="https://raw.githubusercontent.com/MachineEditor/DeepFaceLab-MVE/6e366896e0119e26600c3fcebc914e6fc54fcfee/doc/DFL_welcome.png" align="center">
 
 </td></tr>
 <tr><td colspan=2 align="center">
 
 <p align="center">
 
-![](doc/logo_tensorflow.png)
-![](doc/logo_cuda.png)
-![](doc/logo_directx.png)
+![](https://raw.githubusercontent.com/MachineEditor/DeepFaceLab-MVE/6e366896e0119e26600c3fcebc914e6fc54fcfee/doc/logo_tensorflow.png)
+![](https://raw.githubusercontent.com/MachineEditor/DeepFaceLab-MVE/6e366896e0119e26600c3fcebc914e6fc54fcfee/doc/logo_cuda.png)
+![](https://raw.githubusercontent.com/MachineEditor/DeepFaceLab-MVE/6e366896e0119e26600c3fcebc914e6fc54fcfee/doc/logo_directx.png)
 
 </p>
 
@@ -38,7 +38,7 @@ https://arxiv.org/abs/2005.05535</a>
 
 <a href="https://www.youtube.com/watch?v=kOIMXt8KK8M">
 
-<img src="doc/mini_tutorial.jpg" align="center">
+<img src="https://raw.githubusercontent.com/MachineEditor/DeepFaceLab-MVE/6e366896e0119e26600c3fcebc914e6fc54fcfee/doc/mini_tutorial.jpg" align="center">
 
 </a>
 

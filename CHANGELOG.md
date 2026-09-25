@@ -34,11 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 We created this fork from several other forks of DeepFaceLab.
 Many features of this fork comes mainly from [JH's fork](https://github.com/faceshiftlabs/DeepFaceLab).
 #### Features from JH's fork
-- [Web UI for training preview](doc/features/webui/README.md)
-- [Random color training option](doc/features/random-color/README.md)
-- [Background Power training option](doc/features/background-power/README.md)
-- [MS-SSIM loss training option](doc/features/ms-ssim)
-- [GAN label smoothing and label noise options](doc/features/gan-options)
+- [Web UI for training preview](https://github.com/MachineEditor/DeepFaceLab-MVE/tree/6e366896e0119e26600c3fcebc914e6fc54fcfee/doc/features/webui/README.md)
+- [Random color training option](https://github.com/MachineEditor/DeepFaceLab-MVE/tree/6e366896e0119e26600c3fcebc914e6fc54fcfee/doc/features/random-color/README.md)
+- [Background Power training option](https://github.com/MachineEditor/DeepFaceLab-MVE/tree/6e366896e0119e26600c3fcebc914e6fc54fcfee/doc/features/background-power/README.md)
+- [MS-SSIM loss training option](https://github.com/MachineEditor/DeepFaceLab-MVE/tree/6e366896e0119e26600c3fcebc914e6fc54fcfee/doc/features/ms-ssim)
+- [GAN label smoothing and label noise options](https://github.com/MachineEditor/DeepFaceLab-MVE/tree/6e366896e0119e26600c3fcebc914e6fc54fcfee/doc/features/gan-options)
 - MS-SSIM+L1 loss function, based on ["Loss Functions for Image Restoration with Neural Networks"](https://research.nvidia.com/publication/loss-functions-image-restoration-neural-networks)
 - Autobackup options:
 	- Session name
