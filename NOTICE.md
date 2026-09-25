@@ -53,6 +53,8 @@ change. In summary:
   are logged instead of being swallowed.
 - Removed from the tree: upstream `doc/` (links now point to upstream) and
   the tracked `facelib/*.npy` weights (distributed separately, see below).
+- Retained unchanged: upstream `flaskr/` (the `train --flask-preview`
+  browser preview).
 - Added: `envs/` (per-platform runtime environment specs), `ci/` and
   `.github/workflows/ci.yml`, `WEIGHTS.sha256`, and this file and
   CHANGES.md.

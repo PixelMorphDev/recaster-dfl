@@ -76,6 +76,14 @@ category.
 - `NOTICE.md`, `CHANGES.md`, `WEIGHTS.sha256`, and a recaster-dfl section in
   `README.md`.
 
+### Retained
+
+- `flaskr/`: kept unchanged from upstream. It serves the browser training
+  preview behind `main.py train --flask-preview` (lazy import in
+  `mainscripts/Trainer.py`). Its `flask` / `flask-socketio` dependencies
+  are not in `envs/` yet, so that flag fails with `ImportError` until they
+  are added.
+
 ### Not carried over from Recaster's vendored copy
 
 - `core/interact/interact_streaming.py` and its `DFL_STREAMING_MODE` branch
