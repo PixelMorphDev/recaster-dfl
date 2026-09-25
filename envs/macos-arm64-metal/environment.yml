@@ -35,5 +35,6 @@ dependencies:
       - tensorflow-metal==1.2.0
       - opencv-python==4.10.0.84       # non-headless (highgui for DFL windows)
       - ffmpeg-python                  # mainscripts/VideoEd.py
-      - tf2onnx                        # DFM export (lazy import); pairing with TF 2.16 unverified
+      - tf2onnx                        # DFM export (lazy import). 1.17.0 imports and converts a graph
+                                       # with TF 2.16.2 + numpy 1.26.4 here; same pins as linux
       - tensorboardX                   # optional training logs (lazy import)

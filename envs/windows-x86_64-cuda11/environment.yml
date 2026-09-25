@@ -36,5 +36,6 @@ dependencies:
       - tensorflow==2.10.1
       - opencv-python==4.10.0.84       # non-headless (highgui for DFL windows)
       - ffmpeg-python                  # mainscripts/VideoEd.py
-      - tf2onnx                        # DFM export (lazy import)
+      - tf2onnx                        # DFM export (lazy import). TF 2.10.1 caps protobuf <3.20, so
+                                       # pip backtracks to tf2onnx 1.14.0 / onnx 1.12.0 (PyPI, py3.10)
       - tensorboardX                   # optional training logs (lazy import)

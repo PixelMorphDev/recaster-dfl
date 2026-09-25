@@ -70,7 +70,10 @@ category.
 - `envs/{linux-x86_64-cuda12,macos-arm64-metal,windows-x86_64-cuda11}/environment.yml`:
   per-platform runtime environment specs, and the single source of runtime
   pins. Upstream's root `environment.yml` and `requirements-*.txt` are left
-  unchanged and are not used.
+  unchanged and are not used. `tf2onnx` (DFM export) resolves to 1.17.0
+  with TensorFlow 2.16.2 and NumPy 1.26.4 on Linux py3.10 (PyPI). On
+  Windows, TensorFlow 2.10.1's `protobuf<3.20` cap makes pip backtrack to
+  tf2onnx 1.14.0 / onnx 1.12.0.
 - `ci/import_smoke.py` and `.github/workflows/ci.yml`: CPU import smoke and
   a weights-free source-tarball build.
 - `NOTICE.md`, `CHANGES.md`, `WEIGHTS.sha256`, and a recaster-dfl section in

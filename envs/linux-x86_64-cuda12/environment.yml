@@ -31,5 +31,6 @@ dependencies:
       - tensorflow[and-cuda]==2.16.2   # pulls nvidia-cudnn-cu12 8.9.x
       - opencv-python==4.10.0.84       # non-headless (highgui for DFL windows)
       - ffmpeg-python                  # mainscripts/VideoEd.py
-      - tf2onnx                        # DFM export (lazy import); pairing with TF 2.16 unverified
+      - tf2onnx                        # DFM export (lazy import). Resolves to 1.17.0 (onnx 1.19.0,
+                                       # protobuf 4.25.x) with TF 2.16.2 + numpy 1.26.4 (PyPI, py3.10)
       - tensorboardX                   # optional training logs (lazy import)
