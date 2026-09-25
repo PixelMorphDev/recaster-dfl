@@ -4,6 +4,17 @@ from pathlib import Path
 from core.interact import interact as io
 from core import imagelib 
 import traceback
+import os
+
+# Configure OpenCV thread limits to prevent "Can't spawn new thread: res = 11" errors
+# This is set here as a fallback in case it wasn't set in main.py
+try:
+    # Limit OpenCV threads to prevent resource exhaustion
+    # Use environment variable if set, otherwise use a safe default
+    max_threads = int(os.environ.get('OPENCV_NUM_THREADS', '4'))
+    cv2.setNumThreads(max_threads)
+except:
+    pass  # If setNumThreads fails, continue anyway
 
 def cv2_imread(filename, flags=cv2.IMREAD_UNCHANGED, loader_func=None, verbose=True):
     """

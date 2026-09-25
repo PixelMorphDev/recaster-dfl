@@ -5,11 +5,30 @@ if __name__ == "__main__":
     # Fix for linux
     import multiprocessing
     multiprocessing.set_start_method("spawn")
+    
+    # Fix OpenCV thread spawning issues and multiprocessing resource limits
+    import os
+    import sys
+    
+    # Limit OpenCV threads to prevent "Can't spawn new thread: res = 11" errors
+    # Error 11 is EAGAIN (Resource temporarily unavailable)
+    os.environ.setdefault('OPENCV_NUM_THREADS', '4')
+    os.environ.setdefault('OMP_NUM_THREADS', '4')
+    os.environ.setdefault('MKL_NUM_THREADS', '4')
+    os.environ.setdefault('NUMEXPR_NUM_THREADS', '4')
+    
+    # Configure OpenCV thread limits early (before any cv2 imports)
+    try:
+        import cv2
+        # Limit OpenCV to use fewer threads to avoid resource exhaustion
+        # Use environment variable if set, otherwise use a safe default of 4
+        max_threads = int(os.environ.get('OPENCV_NUM_THREADS', '4'))
+        cv2.setNumThreads(max_threads)
+    except ImportError:
+        pass  # cv2 not available yet, will be configured in cv2ex.py
 
     from core.leras import nn
     nn.initialize_main_env()
-    import os
-    import sys
     import time
     import argparse
 
