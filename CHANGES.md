@@ -31,7 +31,21 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
   `envs/lock.sh` regenerates both from `environment.yml` / `requirements.in`.
   The formerly floating PyPI deps are pinned at the versions the first dry run
   resolved: `ffmpeg-python==0.2.0`, `tf2onnx==1.17.0`, `tensorboardX==2.6.5`.
+  `onnx` is pinned to 1.18.0: the resolved 1.19.0 needs
+  `ml_dtypes.float4_e2m1fn` (ml-dtypes >= 0.5; 1.19.1+ declares it) and TF
+  2.16.2 pins ml-dtypes 0.3.x, so `import tf2onnx` failed and DFM export was
+  broken. 1.18.0 is the newest onnx without an ml_dtypes dependency.
   The env id is `<platform>-<sha12>` over both lock files.
+- The release smoke also exports a tiny leras graph to ONNX the way the
+  models' `export_dfm` does (`tf2onnx.convert._convert_common`, opsets 12 and
+  13), checks it with `onnx.checker` and compares onnx's reference evaluator
+  with TF's output, so DFM export can't silently break again.
+- Vendored Recaster lock model refreshed (app `6e1c720`): a dry-run lock is
+  complete but never published (`is_published_for` is False when
+  `release_problem()` is set). The dry-run install and `make-lock` check
+  `is_complete_for`; for a release tag, `make-lock` also requires
+  `release_problem()` to be None, so a release can't produce a lock the app
+  would refuse to publish.
 - Each env's `explicit.txt` and `pip-freeze.txt` are published next to it
   (`dfl/<tag>/rdfl-env-<env_id>.{explicit,pip-freeze}.txt`) and listed in the
   publish manifest.

@@ -21,8 +21,10 @@ import release_tools as rt  # noqa: E402
 PLATFORMS = ("linux-x86_64-cuda12", "macos-arm64-metal")
 FORBIDDEN = ("onnxruntime", "onnxruntime-gpu", "insightface", "opencv-python-headless", "torch")
 PIP_PINS = {
-    "linux-x86_64-cuda12": {"tensorflow": "2.16.2", "opencv-python": "4.10.0.84", "nvidia-cudnn-cu12": "8.9.7.29"},
-    "macos-arm64-metal": {"tensorflow": "2.16.2", "tensorflow-metal": "1.2.0", "opencv-python": "4.10.0.84"},
+    "linux-x86_64-cuda12": {"tensorflow": "2.16.2", "opencv-python": "4.10.0.84", "nvidia-cudnn-cu12": "8.9.7.29",
+                            "onnx": "1.18.0", "ml-dtypes": "0.3.2"},
+    "macos-arm64-metal": {"tensorflow": "2.16.2", "tensorflow-metal": "1.2.0", "opencv-python": "4.10.0.84",
+                          "onnx": "1.18.0", "ml-dtypes": "0.3.2"},
 }
 CONDA_PINS = {"numpy": "1.26.4"}
 CONDA_SUBDIR = {"linux-x86_64-cuda12": "linux-64", "macos-arm64-metal": "osx-arm64"}

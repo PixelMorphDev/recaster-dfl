@@ -9,5 +9,7 @@ tensorflow==2.16.2
 tensorflow-metal==1.2.0
 opencv-python==4.10.0.84       # non-headless (highgui for DFL windows)
 ffmpeg-python==0.2.0           # mainscripts/VideoEd.py
-tf2onnx==1.17.0                # DFM export (lazy import); onnx 1.19.0, protobuf 4.25.x
+tf2onnx==1.17.0                # DFM export (lazy import); protobuf 4.25.x
+onnx==1.18.0                   # for tf2onnx: newest without ml_dtypes, 1.19.0 needs ml_dtypes.float4_e2m1fn
+                               # (ml-dtypes>=0.5, 1.19.1+ says so) but TF 2.16.2 pins ml-dtypes~=0.3.1
 tensorboardX==2.6.5            # optional training logs (lazy import)
