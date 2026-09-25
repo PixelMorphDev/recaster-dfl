@@ -8,6 +8,12 @@ __pycache__/
 *.bat
 *.zip
 test*
+# Modified by PixelMorph LLC, 2026-09-25 (recaster-dfl): keep the tests/ tree
+# tracked despite upstream's test* pattern. __pycache__ is re-ignored because
+# !tests/** would otherwise un-ignore it.
+!tests/
+!tests/**
+tests/**/__pycache__/
 # Modified by PixelMorph LLC, 2026-09-25 (recaster-dfl): model weights ship as
 # a separate, checksummed artifact (see WEIGHTS.sha256 and NOTICE.md), never as
 # git blobs.

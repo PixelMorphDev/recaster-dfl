@@ -49,6 +49,13 @@ category.
     raise a `SyntaxWarning` on Python 3.12+.
   - `utils/__init__.py`: added, so `utils` is a regular package.
 
+### Changed
+
+- `.gitignore`: added `!tests/` and `!tests/**` exceptions to upstream's
+  `test*` pattern, so files under `tests/` are tracked
+  (`tests/**/__pycache__/` stays ignored). Other `test*` paths are still
+  ignored as upstream intended.
+
 ### Removed
 
 - `doc/`: upstream screenshots, artwork and feature write-ups, which are
