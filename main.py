@@ -1,3 +1,5 @@
+# Modified by PixelMorph LLC, 2026-09-25: thread-limit env defaults; help-text escape fixes.
+# Part of recaster-dfl, derived from MachineEditor/DeepFaceLab-MVE @ 6e36689 (GPL-3.0). See CHANGES.md.
 if __name__ == "__main__":
     # Uncomment to start DFL with PDB
     #__spec__ = "ModuleSpec(name='builtins', loader=<class '_frozen_importlib.BuiltinImporter'>)"

@@ -1,3 +1,5 @@
+# Modified by PixelMorph LLC, 2026-09-25: NumPy 1.24+ dtype aliases.
+# Part of recaster-dfl, derived from MachineEditor/DeepFaceLab-MVE @ 6e36689 (GPL-3.0). See CHANGES.md.
 import numpy as np
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *

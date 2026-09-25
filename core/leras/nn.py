@@ -1,3 +1,5 @@
+# Modified by PixelMorph LLC, 2026-09-25: nn.DeviceConfig reference in getCurrentDeviceConfig.
+# Part of recaster-dfl, derived from MachineEditor/DeepFaceLab-MVE @ 6e36689 (GPL-3.0). See CHANGES.md.
 """
 Leras.
 

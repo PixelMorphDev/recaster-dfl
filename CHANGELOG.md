@@ -1,3 +1,4 @@
+<!-- Modified by PixelMorph LLC, 2026-09-25 (recaster-dfl): links into the removed doc/ directory now point to upstream MachineEditor/DeepFaceLab-MVE @ 6e36689. -->
 # Changelog
 
 All notable changes to this project will be documented in this file.

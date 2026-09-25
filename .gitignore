@@ -8,6 +8,7 @@ __pycache__/
 *.bat
 *.zip
 test*
-# recaster-dfl: model weights ship as a separate, checksummed artifact
-# (see WEIGHTS.sha256 and NOTICE.md), never as git blobs.
+# Modified by PixelMorph LLC, 2026-09-25 (recaster-dfl): model weights ship as
+# a separate, checksummed artifact (see WEIGHTS.sha256 and NOTICE.md), never as
+# git blobs.
 facelib/*.npy
