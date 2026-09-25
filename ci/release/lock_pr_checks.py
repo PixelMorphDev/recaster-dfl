@@ -9,14 +9,17 @@ with the reasons otherwise. Requires:
 
 - the run: a successful ``push`` run of ``.github/workflows/release.yml`` in
   ``--repo`` (head repository too) for a release tag (``rdfl-YYYY.M.P[-rcN]``)
-- the lock: that tag and the run's commit, not a placeholder, no ``DRY RUN``
-  comment, and every URL ``<base>/dfl/<tag>/<name>`` or ``<base>/dfl/weights/<name>``
+- the lock: that tag and the run's commit, not a placeholder, no dry-run
+  comment (``dry run``/``dry-run``/``dry_run``/``dryrun``, any case, as the app's
+  lock model), and every URL ``<base>/dfl/<tag>/<name>``, or for the weights
+  only also ``<base>/dfl/weights/<name>``
 - the public copy at ``<base>/dfl/<tag>/dfl_runtime.lock.json`` (uploaded by
   the publish job) byte-identical to the artifact
 """
 
 import argparse
 import json
+import re
 import sys
 import urllib.request
 from pathlib import Path
@@ -27,6 +30,8 @@ from release_tools import DEFAULT_BASE_URL, KEY_PREFIX, RELEASE_TAG_RE  # noqa: 
 WORKFLOW_PATH = ".github/workflows/release.yml"
 LOCK_NAME = "dfl_runtime.lock.json"
 MAX_LOCK_BYTES = 1 << 20
+# The app's lock model (_DRY_RUN_RE) refuses every one of these spellings
+DRY_RUN_RE = re.compile(r"dry[\s_-]*run", re.IGNORECASE)
 
 
 def run_problems(run: dict, repo: str) -> list:
@@ -58,13 +63,15 @@ def lock_problems(lock: dict, tag: str, commit: str, base_url: str = DEFAULT_BAS
         problems.append(f"lock tag {lock.get('tag')!r}, the run is for {tag!r}")
     if lock.get("placeholder") is not False:
         problems.append("the lock is a placeholder")
-    if "DRY RUN" in str(lock.get("comment") or "").upper():
-        problems.append("the lock is from a dry run (comment says DRY RUN)")
+    if DRY_RUN_RE.search(str(lock.get("comment") or "")):
+        problems.append("the lock is from a dry run (its comment matches DRY RUN)")
     if (lock.get("dfl") or {}).get("commit") != commit:
         problems.append(f"lock commit {(lock.get('dfl') or {}).get('commit')!r}, the run built {commit!r}")
     base = base_url.rstrip("/")
-    prefixes = (f"{base}/{KEY_PREFIX}/{tag}/", f"{base}/{KEY_PREFIX}/weights/")
+    tag_prefix, weights_prefix = f"{base}/{KEY_PREFIX}/{tag}/", f"{base}/{KEY_PREFIX}/weights/"
     for role, artifact in _artifacts(lock):
+        # The shared weights prefix is for the weights only, as in the app's lock model
+        prefixes = (tag_prefix, weights_prefix) if role == "weights" else (tag_prefix,)
         if not isinstance(artifact, dict):
             problems.append(f"{role}: missing")
             continue
@@ -73,7 +80,7 @@ def lock_problems(lock: dict, tag: str, commit: str, base_url: str = DEFAULT_BAS
             problems.append(f"{role}: no urls")
         for url in urls:
             if not isinstance(url, str) or url not in [p + str(artifact.get("name")) for p in prefixes]:
-                problems.append(f"{role}: url {url!r} is not {prefixes[0]}<name> or {prefixes[1]}<name>")
+                problems.append(f"{role}: url {url!r} is not " + " or ".join(p + "<name>" for p in prefixes))
     return problems
 
 

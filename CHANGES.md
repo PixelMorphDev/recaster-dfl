@@ -20,7 +20,11 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
   environment, uploads everything to R2 without overwriting existing
   objects. Pull requests and manual runs are dry runs with no secrets and
   no upload. `ci/release/open_lock_pr.sh` opens the Recaster lock PR from a
-  published run.
+  published run. The PR also bumps the app's `third_party/deepfacelab`
+  submodule to the lock's `dfl.commit` (fetched from this repo's main, and
+  refused if the commit isn't on it). The script stops before changing
+  anything if the app checkout has tracked changes or the PR branch already
+  exists locally or on origin.
 - Hash-pinned env builds (design 4.6). Each built platform
   (`linux-x86_64-cuda12`, `macos-arm64-metal`) now has
   `envs/<platform>/conda-lock.yml` (conda-lock 3.0.4, exact conda-forge
@@ -36,6 +40,12 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
   2.16.2 pins ml-dtypes 0.3.x, so `import tf2onnx` failed and DFM export was
   broken. 1.18.0 is the newest onnx without an ml_dtypes dependency.
   The env id is `<platform>-<sha12>` over both lock files.
+- The conda-pack tool env (`python=3.11`, `conda-pack=0.9.2`) is installed
+  from `ci/release/pack-env/conda-lock.yml` (conda-lock 4.0.2, linux-64 and
+  osx-arm64, sha256 per package; micromamba 2.9.0 rejects a mismatch)
+  instead of being solved at build time.
+- The release smoke requires the probe's `devices` to be a list (empty on CPU
+  runners); `null` (enumeration failed) fails the smoke.
 - The release smoke also exports a tiny leras graph to ONNX the way the
   models' `export_dfm` does (`tf2onnx.convert._convert_common`, opsets 12 and
   13), checks it with `onnx.checker` and compares onnx's reference evaluator
@@ -54,8 +64,10 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
   `conda-meta` `license`).
 - `ci/release/lock_pr_checks.py`: `open_lock_pr.sh` now accepts only a
   successful tag-push run of `release.yml` in this repo for an
-  `rdfl-YYYY.M.P[-rcN]` tag, a lock for that tag and commit with no
-  `DRY RUN` comment and URLs only under `dfl/<tag>/` and `dfl/weights/`, and
+  `rdfl-YYYY.M.P[-rcN]` tag, a lock for that tag and commit with no dry-run
+  comment (`dry run`/`dry-run`/`dry_run`/`dryrun`, any case, as the app's lock
+  model), URLs only under `dfl/<tag>/` (and, for the weights only,
+  `dfl/weights/`), and
   requires the public `dfl/<tag>/dfl_runtime.lock.json` to be byte-identical
   to the run's artifact.
 - `ci/release/publish_r2.py` refuses a manifest `file` that isn't a bare name,
@@ -73,6 +85,9 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
   determinism, lock validation, install emulation, vendored files and
   constants, no-overwrite R2 publishing and manifest validation against a
   fake `aws` cli, lock PR checks, the AGPL guard, and the committed env locks).
+  `tests/test_release_qa_guards.py` (QA): the lock PR checks refuse every lock
+  the app's lock model refuses to publish, and the env build installs only
+  from the committed locks.
 
 - `recaster_bridge/` (protocol 1, bridge 1.0.0): a file-based JSON-lines
   side channel for running DFL out of process. Active only when

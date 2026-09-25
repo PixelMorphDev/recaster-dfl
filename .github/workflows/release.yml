@@ -8,7 +8,8 @@
 # - weights:  facelib/*.npy from upstream 6e36689, checked against
 #             WEIGHTS.sha256 (deterministic tar, content-addressed name)
 # - env:      envs/<platform>/conda-lock.yml (micromamba) + requirements.txt
-#             (pip --require-hashes --no-deps), conda-packed (linux-x86_64-cuda12
+#             (pip --require-hashes --no-deps), conda-packed with the locked
+#             ci/release/pack-env tool env (linux-x86_64-cuda12
 #             on ubuntu-22.04, macos-arm64-metal on macos-14), installed into a
 #             different prefix with the app's safe-extract rules +
 #             conda-unpack, then probe + a CPU S3FD/2DFAN pass + import smoke.
@@ -41,6 +42,7 @@ on:
       - "tests/test_lock_pr_checks.py"
       - "tests/test_env_info.py"
       - "tests/test_env_locks.py"
+      - "tests/test_release_qa_guards.py"
       - ".github/workflows/release.yml"
   workflow_dispatch:
 
@@ -112,7 +114,7 @@ jobs:
       - run: python ci/release/release_tools.py check-vendor
       - run: >-
           python -m unittest -v tests.test_release_tools tests.test_publish_r2 tests.test_lock_pr_checks
-          tests.test_env_info tests.test_env_locks
+          tests.test_env_info tests.test_env_locks tests.test_release_qa_guards
 
   source:
     needs: meta
@@ -254,7 +256,10 @@ jobs:
         run: |
           set -euo pipefail
           env_id="$ENV_ID"
-          "$MAMBA_EXE" create -y -r "$MAMBA_ROOT_PREFIX" -n pack -c conda-forge "python=3.11" "conda-pack=0.9.2"
+          # The pack tool env from its lock (exact builds, sha256), never a solve
+          "$MAMBA_EXE" create -y -r "$MAMBA_ROOT_PREFIX" -n pack -f ci/release/pack-env/conda-lock.yml
+          # (conda-forge's conda-pack 0.9.2 build reports __version__ 0.0.0; check its record)
+          ls "$MAMBA_ROOT_PREFIX"/envs/pack/conda-meta/conda-pack-0.9.2-*.json
           archive="dist/rdfl-env-${env_id}.tar.gz"
           "$MAMBA_EXE" run -r "$MAMBA_ROOT_PREFIX" -n pack conda-pack -p "$BUILD_PREFIX" -o "$archive" --n-threads -1
           # The smoke must use the packed env only

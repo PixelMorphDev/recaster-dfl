@@ -142,5 +142,45 @@ class EnvLockTests(unittest.TestCase):
                 self.assertEqual(rt.env_id(ROOT, platform), expected)
 
 
+class PackToolLockTests(unittest.TestCase):
+    """ci/release/pack-env: the conda-pack tool env, installed from its lock (release.yml)."""
+
+    LOCK = ROOT / "ci" / "release" / "pack-env" / "conda-lock.yml"
+
+    def _packages(self):
+        body = self.LOCK.read_text(encoding="utf-8").split("\npackage:\n", 1)[1]
+        out = {}
+        for block in re.split(r"\n(?=- name: )", body):
+            name = re.search(r"^- name: (\S+)", block, re.M).group(1)
+            platform = re.search(r"^  platform: (\S+)", block, re.M).group(1)
+            out[(platform, name)] = {
+                "version": re.search(r"^  version: '?([^'\n]+)'?$", block, re.M).group(1),
+                "manager": re.search(r"^  manager: (\S+)", block, re.M).group(1),
+                "url": re.search(r"^  url: (\S+)", block, re.M).group(1),
+                "sha256": re.search(r"^    sha256: ([0-9a-f]{64})$", block, re.M),
+            }
+        return out
+
+    def test_pack_lock_is_hashed_and_pinned_for_both_runners(self):
+        pkgs = self._packages()
+        self.assertEqual({platform for platform, _ in pkgs}, set(CONDA_SUBDIR.values()))
+        for (platform, name), pkg in pkgs.items():
+            self.assertEqual(pkg["manager"], "conda", name)
+            self.assertTrue(pkg["url"].startswith("https://conda.anaconda.org/conda-forge/"), name)
+            self.assertIsNotNone(pkg["sha256"], name)
+        for platform in CONDA_SUBDIR.values():
+            with self.subTest(platform):
+                self.assertEqual(pkgs[(platform, "conda-pack")]["version"], "0.9.2")
+                self.assertTrue(pkgs[(platform, "python")]["version"].startswith("3.11."))
+
+    def test_workflow_creates_the_pack_env_from_the_lock_only(self):
+        text = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8").replace("\\\n", " ")
+        creates = [line for line in text.splitlines() if " create " in line and "-n pack" in line]
+        self.assertEqual(len(creates), 1, creates)
+        self.assertIn("-f ci/release/pack-env/conda-lock.yml", creates[0])
+        self.assertNotIn("conda-pack=", creates[0])
+        self.assertNotIn(" -c ", creates[0])
+
+
 if __name__ == "__main__":
     unittest.main()

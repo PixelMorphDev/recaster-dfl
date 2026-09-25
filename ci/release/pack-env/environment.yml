@@ -1,0 +1,14 @@
+# recaster-dfl release tooling: the conda-pack env (release.yml, conda-pack step)
+#
+# Not a runtime env: it only packs envs/<platform>/ builds. The workflow
+# installs it from conda-lock.yml (exact builds, sha256), never from this
+# file. Regenerate the lock after editing it, from this directory:
+#   conda-lock lock --conda conda --no-mamba --no-micromamba \
+#     -f environment.yml -p linux-64 -p osx-arm64 --lockfile conda-lock.yml
+name: pack
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - conda-pack=0.9.2
