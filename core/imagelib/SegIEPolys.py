@@ -132,9 +132,20 @@ class SegIEPolys():
         white = (1,)*c
         black = (0,)*c
         for poly in self.polys:
-            pts = poly.get_pts().astype(np.int32)
-            if len(pts) != 0:
-                cv2.fillPoly(mask, [pts], white if poly.type == SegIEPolyType.INCLUDE else black )
+            pts = poly.get_pts()
+            if len(pts) == 0:
+                continue
+            # Auto-scale normalized coordinates to pixel space.
+            # Stock DFL's XSegEditor stores polys in pixel coords (values up to
+            # image dimensions). MVE and Recaster's Face Editor store them as
+            # normalized floats in [0, 1]. Without scaling, the .astype(int32)
+            # truncation below collapses every normalized point to [0, 0] and
+            # cv2.fillPoly draws a zero-area polygon — the training mask ends
+            # up all zeros and XSeg collapses to predicting empty masks.
+            if pts.size and pts.max() <= 1.0 and pts.min() >= 0.0:
+                pts = pts * np.array([w, h], dtype=np.float32)
+            pts = pts.astype(np.int32)
+            cv2.fillPoly(mask, [pts], white if poly.type == SegIEPolyType.INCLUDE else black )
 
     def dump(self):
         return {'polys' : [ poly.dump() for poly in self.polys ] }
