@@ -1,9 +1,11 @@
-# Modified by PixelMorph LLC, 2026-09-25: first-device fallback when no GPU wins selection.
+# Modified by PixelMorph LLC, 2026-09-25: first-device fallback when no GPU wins selection;
+# initialize_main_env() no longer waits forever on a dead or hung enumeration child.
 # Part of recaster-dfl, derived from MachineEditor/DeepFaceLab-MVE @ 6e36689 (GPL-3.0). See CHANGES.md.
 import sys
 import ctypes
 import os
 import multiprocessing
+import queue
 import json
 import time
 from pathlib import Path
@@ -177,9 +179,32 @@ class Devices(object):
         q = multiprocessing.Queue()
         p = multiprocessing.Process(target=Devices._get_tf_devices_proc, args=(q,), daemon=True)
         p.start()
-        p.join()
-        
-        visible_devices = q.get()
+        # Read before join (a full pipe blocks the child's exit). A child that dies
+        # without a result (TF import error, crash) or hangs must not block us forever.
+        deadline = time.monotonic() + float(os.environ.get("NN_DEVICES_TIMEOUT_S", 120))
+        while True:
+            try:
+                visible_devices = q.get(timeout=1.0)
+                break
+            except queue.Empty:
+                alive = p.is_alive()
+                if alive and time.monotonic() < deadline:
+                    continue
+                if not alive:
+                    try: # the child may have put its result just before exiting
+                        visible_devices = q.get(timeout=1.0)
+                        break
+                    except queue.Empty:
+                        pass
+                p.terminate()
+                p.join(5)
+                if alive:
+                    raise RuntimeError("device enumeration timed out (NN_DEVICES_TIMEOUT_S)")
+                raise RuntimeError(f"device enumeration failed (child exit code {p.exitcode})")
+        p.join(5)
+        if p.is_alive():
+            p.terminate()
+            p.join(5)
 
         os.environ['NN_DEVICES_INITIALIZED'] = '1'
         os.environ['NN_DEVICES_COUNT'] = str(len(visible_devices))
