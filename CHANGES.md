@@ -4,7 +4,50 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
 `6e366896e0119e26600c3fcebc914e6fc54fcfee`. Upstream's own history is in
 `CHANGELOG.md` and in git.
 
-## Unreleased (2026-09-25)
+## Unreleased (2026-09-25): recaster_bridge v1
+
+### Added
+
+- `recaster_bridge/` (protocol 1, bridge 1.0.0): a file-based JSON-lines
+  side channel for running DFL out of process. Active only when
+  `RECASTER_BRIDGE=1` and `RECASTER_RUN_DIR` names an existing run
+  directory, and only in the process that ran `main.py` (spawned worker
+  processes use the stock interact).
+  - `protocol.py`: the event writer (`events.jsonl`, one `O_APPEND` write per
+    line, monotonic `seq`) and control-line parsing.
+  - `answers.py`: prompt answers from `answers.json`
+    (case-insensitive substring match, first hit wins; policies
+    `answers_then_default` and `answers_then_ask`).
+  - `control.py`: polls `control.jsonl` (`heartbeat`, `stop`, `answer`;
+    training commands answer with an `unsupported_command` warning for now),
+    the heartbeat watchdog and `alive` events.
+  - `hooks.py`: activation guards, the `hello` event, and exactly one
+    `done` event per run (exit code, uncaught exception, or `stop`, which
+    terminates DFL's worker processes and exits with code 130).
+  - `interact.py`: `InteractDesktop` subclass that answers `input_*` from
+    the answers file, emits `answered` for every prompt, `progress` for
+    `progress_bar*` (throttled to 10 Hz) and `warning` for `log_err`.
+    Terminal output is unchanged.
+  - `probe.py`: `python -m recaster_bridge.probe --json` prints versions
+    and devices as one JSON line.
+  - `VERSION`: `protocol=1` / `bridge=1.0.0`, read by Recaster without
+    importing the package.
+- `tests/`: bridge unit and subprocess tests (stdlib `unittest`, no
+  TensorFlow), and the protocol v1 golden fixtures in
+  `tests/fixtures/dfl_protocol/v1/` (byte-identical in Recaster).
+- `.github/workflows/ci.yml`: `bridge-tests` job.
+
+### Changed
+
+- `core/interact/interact.py`: `RECASTER_BRIDGE=1` selects
+  `recaster_bridge.interact.make_interact(InteractDesktop)`. With the
+  variable unset the module is unchanged from upstream and the bridge is
+  never imported.
+- `main.py`: `extract --face-type` accepts `midfull_face`, which
+  `Extractor.main` already supported (`FaceType.fromString`) but the CLI
+  rejected.
+
+## 2026-09-25: baseline
 
 First recaster-dfl baseline. The code changes are forward-ported from the
 DeepFaceLab copy previously vendored inside Recaster, one commit per

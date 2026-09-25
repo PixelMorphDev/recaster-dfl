@@ -1,0 +1,4 @@
+{"v":1,"seq":1,"ts":1790000000.0,"run":"20260925-040000-extract-0a0b0c","type":"hello","protocol":1,"bridge_version":"1.0.0","dfl_commit":null,"op":"extract","pid":4244,"python":"/opt/recaster/envs/linux-x86_64-cuda12-abc123/bin/python","tf_version":null}
+{"v":1,"seq":2,"ts":1790000001.0,"run":"20260925-040000-extract-0a0b0c","type":"warning","code":"dfl_error","message":"Input directory not found. Please ensure it exists."}
+{"v":1,"seq":3,"ts":1790000002.0,"run":"20260925-040000-extract-0a0b0c","type":"error","code":"import_error","message":"ModuleNotFoundError: No module named 'tensorflow'","traceback":"Traceback (most recent call last):\n  ...\nModuleNotFoundError: No module named 'tensorflow'\n","fatal":true}
+{"v":1,"seq":4,"ts":1790000002.1,"run":"20260925-040000-extract-0a0b0c","type":"done","status":"error","exit_code":1,"summary":{}}

@@ -1,0 +1,4 @@
+{"v":1,"seq":1,"ts":1790000000.0,"run":"20260925-040000-extract-d4e5f6","type":"hello","protocol":1,"bridge_version":"1.0.0","dfl_commit":null,"op":"extract","pid":4243,"python":"/opt/recaster/envs/linux-x86_64-cuda12-abc123/bin/python","tf_version":null}
+{"v":1,"seq":2,"ts":1790000001.0,"run":"20260925-040000-extract-d4e5f6","type":"progress","current":1,"total":50,"unit":"images"}
+{"v":1,"seq":3,"ts":1790000002.0,"run":"20260925-040000-extract-d4e5f6","type":"state","state":"stopping","reason":"control"}
+{"v":1,"seq":4,"ts":1790000002.1,"run":"20260925-040000-extract-d4e5f6","type":"done","status":"cancelled","exit_code":130,"summary":{}}

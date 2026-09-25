@@ -1,0 +1,7 @@
+{"v":1,"seq":1,"ts":1790000000.0,"run":"20260925-040000-extract-a1b2c3","type":"hello","protocol":1,"bridge_version":"1.0.0","dfl_commit":null,"op":"extract","pid":4242,"python":"/opt/recaster/envs/linux-x86_64-cuda12-abc123/bin/python","tf_version":null}
+{"v":1,"seq":2,"ts":1790000001.0,"run":"20260925-040000-extract-a1b2c3","type":"answered","text":"Continue extraction?","value":true,"source":"answers","key":"continue_extraction"}
+{"v":1,"seq":3,"ts":1790000002.0,"run":"20260925-040000-extract-a1b2c3","type":"progress","current":0,"total":3,"unit":"images"}
+{"v":1,"seq":4,"ts":1790000003.0,"run":"20260925-040000-extract-a1b2c3","type":"progress","current":2,"total":3,"unit":"images"}
+{"v":1,"seq":5,"ts":1790000004.0,"run":"20260925-040000-extract-a1b2c3","type":"progress","current":3,"total":3,"unit":"images"}
+{"v":1,"seq":6,"ts":1790000005.0,"run":"20260925-040000-extract-a1b2c3","type":"alive"}
+{"v":1,"seq":7,"ts":1790000006.0,"run":"20260925-040000-extract-a1b2c3","type":"done","status":"ok","exit_code":0,"summary":{}}

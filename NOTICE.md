@@ -54,6 +54,9 @@ change. In summary:
   the tracked `facelib/*.npy` weights (distributed separately, see below).
 - Retained unchanged: upstream `flaskr/` (the `train --flask-preview`
   browser preview).
+- Added `recaster_bridge/` (the out-of-process JSON-lines bridge, active
+  only with `RECASTER_BRIDGE=1`), hooked in `core/interact/interact.py`;
+  `extract --face-type` accepts `midfull_face`.
 - Added: `envs/` (per-platform runtime environment specs), `ci/` and
   `.github/workflows/ci.yml`, `WEIGHTS.sha256`, and this file and
   CHANGES.md.

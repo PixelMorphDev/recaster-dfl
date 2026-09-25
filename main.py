@@ -1,4 +1,4 @@
-# Modified by PixelMorph LLC, 2026-09-25: thread-limit env defaults; help-text escape fixes.
+# Modified by PixelMorph LLC, 2026-09-25: thread-limit env defaults; help-text escape fixes; extract --face-type midfull_face.
 # Part of recaster-dfl, derived from MachineEditor/DeepFaceLab-MVE @ 6e36689 (GPL-3.0). See CHANGES.md.
 if __name__ == "__main__":
     # Uncomment to start DFL with PDB
@@ -81,7 +81,7 @@ if __name__ == "__main__":
     p.add_argument('--output-dir', required=True, action=fixPathAction, dest="output_dir", help="Output directory. This is where the extracted files will be stored.")
     p.add_argument('--output-debug', action="store_true", dest="output_debug", default=None, help="Writes debug images to <output-dir>_debug directory.")
     p.add_argument('--no-output-debug', action="store_false", dest="output_debug", default=None, help="Don't writes debug images to <output-dir>_debug directory.")
-    p.add_argument('--face-type', dest="face_type", choices=['half_face', 'full_face', 'whole_face', 'head', 'mark_only'], default=None)
+    p.add_argument('--face-type', dest="face_type", choices=['half_face', 'midfull_face', 'full_face', 'whole_face', 'head', 'mark_only'], default=None)
     p.add_argument('--max-faces-from-image', type=int, dest="max_faces_from_image", default=None, help="Max faces from image.")
     p.add_argument('--image-size', type=int, dest="image_size", default=None, help="Output image size.")
     p.add_argument('--jpeg-quality', type=int, dest="jpeg_quality", default=None, help="Jpeg quality.")

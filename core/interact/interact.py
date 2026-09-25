@@ -1,3 +1,5 @@
+# Modified by PixelMorph LLC, 2026-09-25: RECASTER_BRIDGE=1 selects the recaster_bridge interact.
+# Part of recaster-dfl, derived from MachineEditor/DeepFaceLab-MVE @ 6e36689 (GPL-3.0). See CHANGES.md.
 import multiprocessing
 import os
 import sys
@@ -577,5 +579,10 @@ class InteractColab(InteractBase):
 
 if is_colab:
     interact = InteractColab()
+elif os.environ.get("RECASTER_BRIDGE") == "1":
+    # Recaster's out-of-process runner: prompts from answers.json, progress as
+    # events. Falls back to InteractDesktop in DFL's worker processes.
+    from recaster_bridge.interact import make_interact
+    interact = make_interact(InteractDesktop)
 else:
     interact = InteractDesktop()
