@@ -183,7 +183,7 @@ jobs:
     timeout-minutes: 90
     defaults:
       run:
-        shell: bash -el {0}
+        shell: bash
     env:
       PLATFORM: ${{ matrix.platform }}
       TAG: ${{ needs.meta.outputs.tag }}
@@ -218,6 +218,8 @@ jobs:
           cache-downloads: ${{ needs.meta.outputs.release != 'true' }}
           cache-downloads-key: conda-pkgs-${{ matrix.platform }}-${{ hashFiles(format('envs/{0}/*', matrix.platform)) }}
           cache-environment: false
+          # No shell activation: later steps must never see the build env
+          init-shell: none
           post-cleanup: none
       - name: Record the env
         run: |
@@ -225,7 +227,7 @@ jobs:
           prefix="$MAMBA_ROOT_PREFIX/envs/recaster-dfl"
           echo "BUILD_PREFIX=$prefix" >> "$GITHUB_ENV"
           mkdir -p meta dist
-          micromamba env export -n recaster-dfl --explicit > "dist/rdfl-env-${PLATFORM}.explicit.txt"
+          "$MAMBA_EXE" env export -r "$MAMBA_ROOT_PREFIX" -n recaster-dfl --explicit > "dist/rdfl-env-${PLATFORM}.explicit.txt"
           "$prefix/bin/python" -m pip list --format=freeze > "dist/rdfl-env-${PLATFORM}.pip-freeze.txt"
           "$prefix/bin/python" ci/release/env_info.py "$PLATFORM" > meta/env-info.json
           cat meta/env-info.json
@@ -234,9 +236,9 @@ jobs:
           set -euo pipefail
           env_id="$("$TOOLS_PY" ci/release/release_tools.py env-id --platform "$PLATFORM")"
           echo "ENV_ID=$env_id" >> "$GITHUB_ENV"
-          micromamba create -y -n pack -c conda-forge "python=3.11" "conda-pack=0.9.2"
+          "$MAMBA_EXE" create -y -r "$MAMBA_ROOT_PREFIX" -n pack -c conda-forge "python=3.11" "conda-pack=0.9.2"
           archive="dist/rdfl-env-${env_id}.tar.gz"
-          micromamba run -n pack conda-pack -p "$BUILD_PREFIX" -o "$archive" --n-threads -1
+          "$MAMBA_EXE" run -r "$MAMBA_ROOT_PREFIX" -n pack conda-pack -p "$BUILD_PREFIX" -o "$archive" --n-threads -1
           # The smoke must use the packed env only
           rm -rf "$BUILD_PREFIX"
           extra="$("$TOOLS_PY" -c 'import json,sys; d=json.load(open("meta/env-info.json")); d.update(platform=sys.argv[1], env_id=sys.argv[2]); print(json.dumps(d))' "$PLATFORM" "$env_id")"
@@ -262,8 +264,9 @@ jobs:
           read_install() { "$TOOLS_PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$RUNNER_TEMP/install.json" "$1"; }
           python="$(read_install python)"
           source_dir="$(read_install source_dir)"
-          # The child environment Recaster uses: no PYTHONPATH/PYTHONHOME/QT_*, no user site
-          env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP PYTHONNOUSERSITE=1 \
+          # The child environment Recaster uses: no PYTHONPATH/PYTHONHOME/QT_*, no user site.
+          # LD_LIBRARY_PATH is setup-python's (tool Python libs), not something a user has.
+          env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP -u LD_LIBRARY_PATH PYTHONNOUSERSITE=1 \
             "$python" ci/release/runtime_smoke.py "$source_dir" "$COMMIT"
       - name: Summary
         if: always()
