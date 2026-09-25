@@ -150,10 +150,19 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
   unknown ones); `parent_lost` and `parent_exited` are new values of the
   free-form `warning.code` and `state.reason`. If DFL's main thread exits
   while a stop is reaping, the atexit hook waits for the stop to finish.
+  multiprocessing's resource tracker is never signalled: it ignores SIGTERM,
+  so it used to wait out the 2 s grace and get SIGKILLed before it could
+  unlink the named semaphores it tracks (on macOS they persist until
+  reboot). It reads EOF when the bridge and its workers are gone, unlinks
+  and exits on its own; the Recaster runner's group kill after the bridge
+  exits is the safety net. `done{cancelled}` is now written and
+  `events.jsonl` closed before any worker is terminated, so a crash a dying
+  worker causes in the main thread can't turn the stop into `done{error}`.
   `tests/test_bridge_reap.py` runs a stub with multiprocessing workers, a
   SIGTERM-ignoring worker, a grandchild and the resource tracker, SIGKILLs
   its intermediate parent (or stops heartbeating) and checks that the group
-  is empty within 6 s.
+  is empty within 6 s; a stub holding a `multiprocessing.Lock` must exit
+  within 1.5 s of a stop and leave no named semaphore behind.
 
 - `.github/workflows/release.yml`: the first tag run (`rdfl-2026.10.0-rc1`,
   run 36125530274) failed in both env jobs before building anything, with

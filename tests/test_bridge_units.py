@@ -397,6 +397,58 @@ class ReapGuardTests(unittest.TestCase):
         self.assertEqual(kill.call_args_list, [mock.call(11, signal.SIGTERM), mock.call(12, signal.SIGTERM),
                                                mock.call(12, signal.SIGKILL)])
 
+    def test_resource_tracker_is_never_signalled(self):
+        # 13 is the tracker: it ignores SIGTERM and must not be SIGKILLed before it unlinks
+        listings = iter([[11, 13], [13], [13]])
+        with mock.patch.object(hooks_mod, "leads_process_group", return_value=True), \
+                mock.patch.object(hooks_mod, "resource_tracker_pid", return_value=13), \
+                mock.patch.object(hooks_mod, "group_members", side_effect=lambda *a: next(listings)), \
+                mock.patch.object(hooks_mod.time, "sleep"), \
+                mock.patch.object(hooks_mod.os, "kill") as kill:
+            self.assertTrue(hooks_mod.reap_process_group(term_grace_s=5, kill_wait_s=5))
+        self.assertEqual(kill.call_args_list, [mock.call(11, signal.SIGTERM)])
+
+    def test_only_the_tracker_left_is_clean(self):
+        with mock.patch.object(hooks_mod, "leads_process_group", return_value=True), \
+                mock.patch.object(hooks_mod, "resource_tracker_pid", return_value=13), \
+                mock.patch.object(hooks_mod, "group_members", return_value=[13]), \
+                mock.patch.object(hooks_mod.os, "kill") as kill:
+            self.assertTrue(hooks_mod.reap_process_group())
+        kill.assert_not_called()
+
+    def test_resource_tracker_pid(self):
+        from multiprocessing import resource_tracker
+        with mock.patch.object(resource_tracker._resource_tracker, "_pid", 4321):
+            self.assertEqual(hooks_mod.resource_tracker_pid(), 4321)
+        with mock.patch.object(resource_tracker._resource_tracker, "_pid", None):
+            self.assertIsNone(hooks_mod.resource_tracker_pid())
+
+
+class StopOrderTests(unittest.TestCase):
+    def test_done_cancelled_is_written_before_workers_are_signalled(self):
+        # A worker's death can crash DFL's main thread; its excepthook must not win
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        run_dir = Path(tmp.name)
+        exits = []
+        session = hooks_mod.BridgeSession(run_dir, "run-order", exit_func=exits.append)
+        seen = []
+
+        class Child:
+            def terminate(self):
+                seen.append(session.is_done)
+                session.writer.emit("error", code="internal", message="worker died", fatal=True)
+                session.finish("error", 1)
+
+        with mock.patch.object(hooks_mod.multiprocessing, "active_children", return_value=[Child()]), \
+                mock.patch.object(hooks_mod, "reap_process_group", return_value=True):
+            session.request_stop(False, "user")
+        self.assertEqual(seen, [True])
+        self.assertEqual(exits, [hooks_mod.EXIT_CANCELLED])
+        events = _events(run_dir / "events.jsonl")
+        self.assertEqual([e["type"] for e in events], ["state", "done"])
+        self.assertEqual(events[-1]["status"], "cancelled")
+
 
 class ProbeDeviceTests(unittest.TestCase):
     """probe._devices() against a fake core.leras.device (no TensorFlow needed)."""

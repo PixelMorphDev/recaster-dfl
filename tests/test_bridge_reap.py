@@ -6,6 +6,9 @@ workers, a SIGTERM-ignoring worker, a grandchild and the resource tracker.
 Like the Recaster runner, the stub leads its own session. The caller's death
 is simulated by running it under an intermediate parent that is SIGKILLed.
 Group membership is checked with ``ps`` here, not with the bridge's helper.
+
+``bridge_stub.py semlock`` holds a ``multiprocessing.Lock``: a stop must not
+SIGKILL the resource tracker, so the named semaphore is unlinked.
 """
 import json
 import os
@@ -20,6 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 STUB = ROOT / "tests" / "bridge_stub.py"
 REAP_DEADLINE_S = 6   # parent poll (1 s) + SIGTERM grace (2 s) + SIGKILL, with CI slack
+QUICK_STOP_S = 1.5    # stop -> exit when every worker honours SIGTERM (was > 2 s: the tracker waited out the grace)
 
 ANSWERS = {"v": 1, "policy": "answers_then_default", "ask_timeout_s": 0, "answers": []}
 
@@ -58,6 +62,16 @@ def _alive(pid):
     except OSError:
         return False
     return True
+
+
+def _semaphore_exists(name):
+    """True when the named semaphore is still there (creating it exclusively fails)."""
+    import _multiprocessing
+    try:
+        _multiprocessing.SemLock(1, 1, 1, name, True)  # unlink=True: gone again at once
+    except FileExistsError:
+        return True
+    return False
 
 
 def _killpg(pgid):
@@ -162,6 +176,43 @@ class GroupReapTests(unittest.TestCase):
                 proc.wait(10)
             proc.stderr.close()
         self._assert_cancelled("heartbeat_lost", "heartbeat")
+
+    def test_stop_spares_the_resource_tracker_so_semaphores_are_unlinked(self):
+        sem_info = Path(self.tmp.name) / "sem.json"
+        env = self._env(heartbeat_s=0)
+        env["STUB_SEM_INFO"] = str(sem_info)
+        proc = subprocess.Popen([sys.executable, "-u", str(STUB), "extract", "semlock"], cwd=str(ROOT), env=env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        self.groups.append(proc.pid)
+        name = None
+        try:
+            deadline = time.time() + 60
+            while time.time() < deadline and not sem_info.exists():
+                self.assertIsNone(proc.poll(), "the stub exited before its lock was up")
+                time.sleep(0.05)
+            info = json.loads(sem_info.read_text())
+            name = info["name"]
+            self.assertTrue(_semaphore_exists(name))
+            self.assertIn(info["resource_tracker"], _live_group(proc.pid))
+            stopped_at = time.time()
+            with open(self.run_dir / "control.jsonl", "a") as f:
+                f.write('{"v":1,"seq":1,"cmd":"stop","save":false}\n')
+            self.assertEqual(proc.wait(30), 130)
+            took = time.time() - stopped_at
+            self.assertLess(took, QUICK_STOP_S, f"stop took {took:.2f} s")
+            # The tracker reads EOF once the bridge and its worker are gone, unlinks, exits
+            self._assert_group_gone(proc.pid, info, stopped_at)
+            self.assertFalse(_semaphore_exists(name), "the stop leaked the lock's named semaphore")
+        finally:
+            if proc.poll() is None:
+                _killpg(proc.pid)
+                proc.wait(10)
+            if name is not None and _semaphore_exists(name):
+                import _multiprocessing
+                _multiprocessing.sem_unlink(name)
+        events = _events(self.run_dir)
+        self.assertEqual((events[-1]["type"], events[-1]["status"], events[-1]["exit_code"]),
+                         ("done", "cancelled", 130))
 
     def test_never_reaps_a_group_it_does_not_lead(self):
         # The stub runs in its caller's group: a stop must not signal the caller

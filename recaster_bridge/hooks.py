@@ -19,6 +19,12 @@ session): SIGTERM to every other member, ``REAP_TERM_GRACE_S`` to exit, then
 SIGKILL. This process goes last: ``done`` is written and the event file
 closed first, and only a member that survives SIGKILL (or a group that
 can't be listed) makes it ``killpg(SIGKILL)`` its own group, itself included.
+
+multiprocessing's resource tracker is left alone: it ignores SIGTERM, and a
+SIGKILL would stop it from unlinking the named semaphores it tracks (on
+macOS they persist until reboot). It reads EOF once this process and its
+workers are gone, cleans up and exits on its own; if it doesn't, the
+Recaster runner's group kill after this process exits covers it.
 """
 
 import atexit
@@ -131,10 +137,27 @@ def _signal_all(pids: List[int], sig: int) -> None:
             pass
 
 
-def _wait_group_empty(pgid: int, me: int, timeout: float) -> Optional[List[int]]:
+def resource_tracker_pid() -> Optional[int]:
+    """Pid of the resource tracker this process started, if any."""
+    try:
+        from multiprocessing import resource_tracker
+    except ImportError:
+        return None
+    pid = getattr(getattr(resource_tracker, "_resource_tracker", None), "_pid", None)
+    return pid if isinstance(pid, int) and pid > 0 else None
+
+
+def _reapable(pgid: int, me: int, spare: Optional[int]) -> Optional[List[int]]:
+    members = group_members(pgid, me)
+    if members is None or spare is None:
+        return members
+    return [pid for pid in members if pid != spare]
+
+
+def _wait_group_empty(pgid: int, me: int, spare: Optional[int], timeout: float) -> Optional[List[int]]:
     deadline = time.monotonic() + timeout
     while True:
-        members = group_members(pgid, me)
+        members = _reapable(pgid, me, spare)
         if not members or time.monotonic() >= deadline:
             return members
         time.sleep(_REAP_POLL_S)
@@ -154,23 +177,25 @@ def reap_process_group(term_grace_s: float = REAP_TERM_GRACE_S,
     """SIGTERM, then SIGKILL, every other member of this process's group.
 
     Only when this process leads the group (otherwise the group belongs to
-    whoever started it). True when nothing else is left in the group.
+    whoever started it). The resource tracker is never signalled (see the
+    module docstring). True when nothing else but it is left in the group.
     """
     if not leads_process_group():
         return True
     me = pgid = os.getpid()
-    members = group_members(pgid, me)
+    spare = resource_tracker_pid()
+    members = _reapable(pgid, me, spare)
     if members is None:
         return False
     if not members:
         return True
     _signal_all(members, signal.SIGTERM)
-    members = _wait_group_empty(pgid, me, term_grace_s)
+    members = _wait_group_empty(pgid, me, spare, term_grace_s)
     if members is None:
         return False
     if members:
         _signal_all(members, signal.SIGKILL)
-        members = _wait_group_empty(pgid, me, kill_wait_s)
+        members = _wait_group_empty(pgid, me, spare, kill_wait_s)
     return members == []
 
 
@@ -235,11 +260,13 @@ class BridgeSession:
     def request_stop(self, save: bool, reason: str) -> None:
         """Stop the run. Non-training ops have nothing to save: cancel now.
 
-        Called from the control thread. DFL's worker processes are terminated
-        first (they are daemonic and would otherwise die with the parent only
-        on a clean interpreter exit, which os._exit skips), then the rest of
-        the process group is reaped (grandchildren, workers that ignore
-        SIGTERM, multiprocessing's resource tracker).
+        Called from the control thread. ``done{cancelled}`` is written and the
+        event file closed before any worker is signalled, so a crash that a
+        dying worker causes in DFL's main thread can't turn it into
+        ``done{error}``. Then DFL's worker processes are terminated (they are
+        daemonic and would otherwise die with the parent only on a clean
+        interpreter exit, which os._exit skips) and the rest of the process
+        group is reaped (grandchildren, workers that ignore SIGTERM).
         """
         with self._done_lock:
             if self._stopping or self._done:
@@ -247,14 +274,14 @@ class BridgeSession:
             self._stopping = True
             self._stop_thread = threading.current_thread()
         self.writer.emit("state", state="stopping", reason=reason)
+        self.finish("cancelled", EXIT_CANCELLED)
+        self.control.halt()
+        self.writer.close()  # nothing is written after done, even while the group is reaped
         for child in multiprocessing.active_children():
             try:
                 child.terminate()
             except Exception:
                 pass
-        self.finish("cancelled", EXIT_CANCELLED)
-        self.control.halt()
-        self.writer.close()  # nothing is written after done, even while the group is reaped
         try:
             group_clean = reap_process_group()
         except Exception:
