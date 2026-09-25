@@ -1,0 +1,40 @@
+# recaster-dfl runtime environment: windows-x86_64-cuda11
+#
+# Single source of truth for this platform's DFL/TensorFlow env. The
+# exact, hash-pinned resolution lives next to this file in conda-lock.yml
+# (generated from this spec; not committed yet, see NOTICE.md / CHANGES.md).
+# Upstream's root environment.yml and requirements-*.txt are kept only as
+# upstream history and are NOT used by Recaster.
+#
+# Forbidden in this env (must never be added): onnxruntime*, insightface,
+# opencv-python-headless, torch. Recaster's ONNX stack lives in a separate
+# interpreter.
+#
+# TensorFlow 2.10.1 is the last release with native Windows GPU support,
+# which caps Python at 3.10 and NumPy at 1.23.x on this platform.
+name: recaster-dfl
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.10
+  - numpy=1.23.5
+  - cudatoolkit=11.2
+  - cudnn=8.1
+  - pyqt=5.15.*        # XSegEditor / merger GUI (conda-forge build)
+  - scipy
+  - h5py               # mainscripts/Sorter.py
+  - numexpr            # core/imagelib/color_transfer.py
+  - scikit-image       # core/imagelib/estimate_sharpness.py (sort by blur)
+  - pillow
+  - colorama
+  - tqdm
+  - pyyaml             # models/ModelBase.py (module-level import)
+  - jsonschema         # models/ModelBase.py (module-level import)
+  - pip
+  - pip:
+      - tensorflow==2.10.1
+      - opencv-python==4.10.0.84       # non-headless (highgui for DFL windows)
+      - ffmpeg-python                  # mainscripts/VideoEd.py
+      - tf2onnx                        # DFM export (lazy import)
+      - tensorboardX                   # optional training logs (lazy import)
