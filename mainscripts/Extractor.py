@@ -310,6 +310,17 @@ class ExtractSubprocessor(Subprocessor):
             rects = data.rects
             landmarks = data.landmarks
 
+            if final_output_path is None:
+                io.log_err("final_output_path is None! Cannot save files.")
+                return data
+            
+            if not final_output_path.exists():
+                try:
+                    final_output_path.mkdir(parents=True, exist_ok=True)
+                except Exception as e:
+                    io.log_err(f"Failed to create output directory {final_output_path}: {e}")
+                    return data
+
             if output_debug_path is not None:
                 debug_image = image.copy()
 
@@ -350,8 +361,11 @@ class ExtractSubprocessor(Subprocessor):
                     output_filepath = output_path / f"{filepath.stem}_{face_idx}.jpg"
                 else:
                     output_filepath = output_path / f"{data.idx}_{face_idx}.jpg"
-                cv2_imwrite(output_filepath, face_image, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality ] )
-
+                
+                if not cv2_imwrite(output_filepath, face_image, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality ] ):
+                    io.log_err(f"Failed to save face image to {output_filepath}")
+                    continue
+                
                 dflimg = DFLJPG.load(output_filepath)
                 dflimg.set_face_type(FaceType.toString(face_type))
                 dflimg.set_landmarks(face_image_landmarks.tolist())

@@ -37,10 +37,15 @@ def cv2_imwrite(filename, img, *args):
     ret, buf = cv2.imencode( Path(filename).suffix, img, *args)
     if ret == True:
         try:
+            # Ensure parent directory exists
+            Path(filename).parent.mkdir(parents=True, exist_ok=True)
             with open(filename, "wb") as stream:
                 stream.write( buf )
-        except:
-            pass
+            return True
+        except Exception as e:
+            io.log_err(f"Failed to write image {filename}: {traceback.format_exc()}")
+            return False
+    return False
 
 def cv2_resize(x, *args, **kwargs):
     h,w,c = x.shape
