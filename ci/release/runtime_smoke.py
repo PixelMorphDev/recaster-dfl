@@ -72,6 +72,14 @@ def main(argv) -> int:
         problems.append("onnxruntime is importable in the DFL env")
     if not str(probe.get("python", "")).startswith(str(Path(python).parent.parent)):
         problems.append(f"probe ran {probe.get('python')}, not the installed env")
+    # devices: DFL's device table, a list (empty on CPU runners).
+    # TODO(PixelMorphDev/recaster-dfl#2): drop the None allowance once the probe
+    # fix (initialize_main_env before getDevices) is on main; until then the
+    # probe always reports null.
+    devices = probe.get("devices")
+    if devices is not None and not (isinstance(devices, list)
+                                    and all(isinstance(d, dict) and "name" in d for d in devices)):
+        problems.append(f"devices {devices!r} is not a list of devices")
     if problems:
         print("probe problems:\n  " + "\n  ".join(problems))
         return 1
