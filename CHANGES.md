@@ -55,8 +55,14 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
   does), so it reports DFL's device table (`METAL` on Apple Silicon, CUDA
   GPUs, `[]` on CPU-only hosts). When enumeration fails it still reports
   `null` and prints the reason to stderr. It is skipped when TensorFlow isn't
-  importable, since the enumeration child would die and
-  `initialize_main_env()` would wait on it forever.
+  importable.
+- `core/leras/device.py`: `Devices.initialize_main_env()` waited forever
+  (`p.join(); q.get()` with no timeout) when the enumeration child died
+  without a result, for example a TensorFlow that is found but fails or
+  crashes on import. It now reads the queue before joining, polls it once a
+  second, and raises `RuntimeError` when the child exits without a result or
+  after `NN_DEVICES_TIMEOUT_S` seconds (default 120), terminating the child
+  first. The probe reports that as `devices: null` with the reason on stderr.
 
 ## 2026-09-25: baseline
 

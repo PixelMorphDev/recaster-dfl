@@ -46,8 +46,8 @@ def _devices():
     raises until it has run. Call it before this process imports TensorFlow
     (a fork after TF has started its threads can hang the child), and keep the
     __main__ guard below (spawn start method on macOS/Windows). Skipped without
-    an importable TensorFlow: the child would die and initialize_main_env()
-    would block on its queue forever.
+    an importable TensorFlow, since the child could only fail; a child that dies
+    or hangs makes initialize_main_env() raise (NN_DEVICES_TIMEOUT_S, default 120).
     """
     if importlib.util.find_spec("tensorflow") is None:
         print("recaster_bridge.probe: device enumeration skipped: tensorflow is not importable",

@@ -216,5 +216,39 @@ class ProbeTests(unittest.TestCase):
             self.assertIn("METAL", [d["name"] for d in info["devices"]])
 
 
+class ProbeBrokenTensorflowTests(unittest.TestCase):
+    """A TensorFlow that find_spec() sees but that fails (or crashes) on import must
+    not hang the probe in Devices.initialize_main_env() (QA regression, REC-187)."""
+
+    def _probe_with_fake_tf(self, body, expect_json=True):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "tensorflow").mkdir()
+            (Path(tmp) / "tensorflow" / "__init__.py").write_text(body)
+            env = dict(_base_env(), PYTHONPATH=tmp, PYTHONNOUSERSITE="1")
+            proc = subprocess.Popen([sys.executable, "-u", "-m", "recaster_bridge.probe", "--json"],
+                                    cwd=str(ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    start_new_session=True)
+            try:
+                out, err = proc.communicate(timeout=60)
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.communicate()
+                self.fail("probe hung (> 60 s) with a TensorFlow that fails to import")
+        if not expect_json:
+            return  # a hard crash in the probe's own TF import can't print JSON; it just must not hang
+        lines = [line for line in out.decode().splitlines() if line.startswith("{")]
+        self.assertTrue(lines, err.decode())
+        info = json.loads(lines[-1])
+        self.assertIsNone(info["devices"])
+        self.assertIsNone(info["tf_version"])
+        self.assertIn("device enumeration failed", err.decode())
+
+    def test_tf_import_error(self):
+        self._probe_with_fake_tf('raise ImportError("libcudart.so.12: cannot open shared object file")\n')
+
+    def test_tf_import_crash(self):
+        self._probe_with_fake_tf("import os\nos._exit(245)\n", expect_json=False)
+
+
 if __name__ == "__main__":
     unittest.main()
