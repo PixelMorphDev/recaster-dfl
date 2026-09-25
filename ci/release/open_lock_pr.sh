@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Part of recaster-dfl (GPL-3.0). Copyright (C) 2026 PixelMorph LLC. See CHANGES.md.
+#
+# Open the Recaster PR that updates dfl_desktop/resources/dfl_runtime.lock.json
+# from a *published* release run:
+#   ci/release/open_lock_pr.sh <run-id> <path-to-recaster-checkout>
+#
+# Runs on the owner's machine with `gh` logged in (the fork's CI has no token
+# for the private app repo), from a recaster-dfl checkout. It trusts nothing
+# about the run it is given until lock_pr_checks.py has confirmed that:
+# - the run is a successful tag push of .github/workflows/release.yml in
+#   PixelMorphDev/recaster-dfl, for an rdfl-YYYY.M.P[-rcN] tag
+# - its `dfl-runtime-lock-published` artifact (uploaded only by the publish
+#   job, after every object is on R2) is for that tag and commit, is not a
+#   dry run, and points only at runtimes.recaster.studio/dfl/<tag>/ and
+#   /dfl/weights/
+# - the public dfl/<tag>/dfl_runtime.lock.json is byte-identical to it
+# Then it validates the lock with the checkout's own lock model, checks that
+# each URL answers with the expected size, branches from origin/main, pins the
+# third_party/deepfacelab submodule to the lock's dfl.commit (which must be on
+# the fork's main), runs the bundled-lock test and opens the PR.
+#
+# The checkout must have no tracked changes. Re-running for a tag whose branch
+# (chore/dfl-runtime-lock-<tag>) already exists, locally or on origin, stops
+# before touching anything; delete that branch to start over.
+set -euo pipefail
+
+run_id="$1"
+app="$(cd "$2" && pwd)"
+here="$(cd "$(dirname "$0")" && pwd)"
+fork_repo="PixelMorphDev/recaster-dfl"
+case "$run_id" in ''|*[!0-9]*) echo "error: run id must be numeric" >&2; exit 1;; esac
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+gh api "repos/${fork_repo}/actions/runs/${run_id}" > "$work/run.json"
+gh run download "$run_id" -R "$fork_repo" -n dfl-runtime-lock-published -D "$work/artifact"
+lock="$work/artifact/dfl_runtime.lock.json"
+tag="$(python3 "$here/lock_pr_checks.py" --repo "$fork_repo" --run "$work/run.json" --lock "$lock")"
+
+commit="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["dfl"]["commit"])' "$lock")"
+branch="chore/dfl-runtime-lock-${tag}"
+sub="third_party/deepfacelab"
+
+cd "$app"
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "error: $app has tracked changes; commit or stash them first" >&2; exit 1
+fi
+git fetch origin main
+if git rev-parse --verify --quiet "refs/heads/${branch}" > /dev/null; then
+  echo "error: branch $branch already exists in $app (from an earlier run?)." >&2
+  echo "  Finish that PR by hand, or delete the branch (git branch -D $branch) and re-run." >&2
+  exit 1
+fi
+rc=0; git ls-remote --exit-code --heads origin "$branch" > /dev/null || rc=$?
+case "$rc" in
+  0) echo "error: branch $branch already exists on origin (from an earlier run?)." >&2
+     echo "  Finish that PR by hand, or delete the remote branch (git push origin --delete $branch) and re-run." >&2
+     exit 1 ;;
+  2) ;;  # not on origin
+  *) echo "error: could not list origin's branches (git ls-remote exit $rc)" >&2; exit 1 ;;
+esac
+python3 - "$lock" <<'PY'
+import json, sys, urllib.request
+from dfl_desktop.dfl.lock_model import load_lock
+lock = load_lock(sys.argv[1])
+if lock.placeholder:
+    sys.exit("the lock is a placeholder")
+items = [lock.artifacts.source, lock.artifacts.weights, *lock.artifacts.envs.values()]
+for a in items:
+    for url in a.urls:
+        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "Recaster/lock-pr"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            size = int(r.headers.get("Content-Length", -1))
+        if size != a.size:
+            sys.exit(f"{url}: Content-Length {size}, the lock says {a.size}")
+        print(f"ok {url} ({size} bytes)")
+print(f"lock {lock.tag} valid for: {', '.join(lock.artifacts.envs)}")
+PY
+
+# The submodule follows the lock: dfl.commit, fetched from the fork's main.
+# Checked before the branch exists, so a bad commit leaves nothing behind.
+git submodule update --init -- "$sub"
+git -C "$sub" fetch --no-tags "https://github.com/${fork_repo}.git" main
+if ! git -C "$sub" merge-base --is-ancestor "$commit" FETCH_HEAD; then
+  echo "error: the lock's dfl.commit $commit is not on ${fork_repo} main" >&2; exit 1
+fi
+
+git switch -c "$branch" origin/main
+git -C "$sub" checkout -q --detach "$commit"
+cp "$lock" dfl_desktop/resources/dfl_runtime.lock.json
+python3 -m pytest tests/unit/dfl/test_lock_bundled_valid.py -q
+git add dfl_desktop/resources/dfl_runtime.lock.json "$sub"
+if [ "$(git rev-parse ":${sub}")" != "$commit" ]; then
+  echo "error: staged $sub is $(git rev-parse ":${sub}"), expected $commit" >&2; exit 1
+fi
+git commit -m "chore(dfl): runtime lock for ${tag}
+
+Updates dfl_desktop/resources/dfl_runtime.lock.json and bumps the
+${sub} submodule to ${commit}, the lock's dfl.commit.
+
+Generated by the recaster-dfl release run
+https://github.com/${fork_repo}/actions/runs/${run_id}"
+git push -u origin "$branch"
+gh pr create --base main --head "$branch" --title "chore(dfl): runtime lock for ${tag}" \
+  --body "Updates \`dfl_desktop/resources/dfl_runtime.lock.json\` to the published recaster-dfl runtime \`${tag}\`, and bumps the \`${sub}\` submodule to \`${commit}\` (the lock's \`dfl.commit\`).
+
+Release run: https://github.com/${fork_repo}/actions/runs/${run_id}
+Every artifact URL answered HEAD with the lock's size; the lock validates with \`lock_model.py\`."

@@ -1,0 +1,446 @@
+# recaster-dfl release pipeline (Recaster design RF-501 §4.6, slice E2).
+#
+# Builds the runtime artifacts Recaster's runtime manager installs, installs
+# them the way the app does, smoke tests them, and emits
+# dfl_runtime.lock.json:
+#
+# - source:   weights-free git archive of HEAD + SOURCE.txt (tar.gz)
+# - weights:  facelib/*.npy from upstream 6e36689, checked against
+#             WEIGHTS.sha256 (deterministic tar, content-addressed name)
+# - env:      envs/<platform>/conda-lock.yml (micromamba) + requirements.txt
+#             (pip --require-hashes --no-deps), conda-packed with the locked
+#             ci/release/pack-env tool env (linux-x86_64-cuda12
+#             on ubuntu-22.04, macos-arm64-metal on macos-14), installed into a
+#             different prefix with the app's safe-extract rules +
+#             conda-unpack, then probe + a CPU S3FD/2DFAN pass + import smoke.
+#             explicit.txt and pip-freeze.txt are published next to it.
+# - lock:     validated against the app's lock model (ci/release/vendor)
+# - publish:  tag pushes only, in the protected `release` environment (owner
+#             approval, rdfl-* tags only). Uploads to R2 `recaster-runtimes`
+#             under dfl/<tag>/ (weights: dfl/weights/), never overwriting,
+#             lock last. Fails if the R2 secrets aren't set.
+#
+# Pull requests, workflow_dispatch and non-tag pushes are dry runs: the same
+# build, install and smoke, no secrets, no upload. The app-side lock PR is
+# opened by the owner with ci/release/open_lock_pr.sh (this repo's token
+# can't write to the private app repo).
+#
+# Actions are pinned by commit SHA.
+name: release
+
+on:
+  push:
+    tags: ["rdfl-*"]
+  pull_request:
+    paths:
+      - "envs/**"
+      - "ci/**"
+      - "recaster_bridge/**"
+      - "WEIGHTS.sha256"
+      - "tests/test_release_tools.py"
+      - "tests/test_publish_r2.py"
+      - "tests/test_lock_pr_checks.py"
+      - "tests/test_env_info.py"
+      - "tests/test_env_locks.py"
+      - "tests/test_release_qa_guards.py"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  PUBLIC_BASE_URL: https://runtimes.recaster.studio
+  UPSTREAM_COMMIT: 6e366896e0119e26600c3fcebc914e6fc54fcfee
+  PIP_NO_CACHE_DIR: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  meta:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      commit: ${{ steps.meta.outputs.commit }}
+      release: ${{ steps.meta.outputs.release }}
+      retention: ${{ steps.meta.outputs.retention }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse HEAD)"
+          if [ "$EVENT" = push ] && [[ "$REF" == refs/tags/rdfl-* ]]; then
+            if ! [[ "$REF_NAME" =~ ^rdfl-[0-9]{4}\.[0-9]{1,2}\.[0-9]+(-rc[0-9]+)?$ ]]; then
+              echo "::error::tag $REF_NAME is not rdfl-YYYY.M.P or rdfl-YYYY.M.P-rcN"; exit 1
+            fi
+            # Release only commits that are on main (reviewed), never a side branch
+            status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/main...${commit}" --jq .status)"
+            if [ "$status" != identical ] && [ "$status" != behind ]; then
+              echo "::error::$REF_NAME ($commit) is not on main (compare: $status)"; exit 1
+            fi
+            tag="$REF_NAME"; release=true; retention=14
+          else
+            tag="rdfl-dryrun-${commit:0:12}"; release=false; retention=3
+          fi
+          { echo "tag=$tag"; echo "release=$release"; echo "retention=$retention"; echo "commit=$commit"; } >> "$GITHUB_OUTPUT"
+          echo "commit=$commit event=$EVENT ref=$REF"
+
+  tools:
+    # Release tooling tests (lock model, unpacked_size, weights determinism,
+    # install emulation, R2 no-overwrite publish against a fake aws cli,
+    # lock PR checks, AGPL guard, env locks) and the vendored-app-file check.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - run: python -m pip install "pydantic==2.12.5"
+      - run: python ci/release/release_tools.py check-vendor
+      - run: >-
+          python -m unittest -v tests.test_release_tools tests.test_publish_r2 tests.test_lock_pr_checks
+          tests.test_env_info tests.test_env_locks tests.test_release_qa_guards
+
+  source:
+    needs: meta
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build source artifact
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          path="$(ci/release/build_source.sh "$TAG" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" dist)"
+          mkdir -p meta
+          python3 ci/release/release_tools.py measure "$path" --out meta/source.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rdfl-source
+          path: dist/
+          compression-level: 0
+          retention-days: ${{ fromJSON(needs.meta.outputs.retention) }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rdfl-meta-source
+          path: meta/source.json
+          retention-days: ${{ fromJSON(needs.meta.outputs.retention) }}
+
+  weights:
+    needs: meta
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch the weights from upstream history
+        run: |
+          set -euo pipefail
+          # Public repo: an anonymous fetch of the one upstream commit that has the blobs
+          git fetch --no-tags --depth=1 origin "$UPSTREAM_COMMIT"
+          mkdir -p weights-src/facelib
+          while read -r _sha rel; do
+            [ -n "$rel" ] || continue
+            git show "${UPSTREAM_COMMIT}:${rel}" > "weights-src/${rel}"
+          done < WEIGHTS.sha256
+      - name: Build weights artifact
+        run: |
+          set -euo pipefail
+          path="$(python3 ci/release/release_tools.py build-weights --src weights-src --manifest WEIGHTS.sha256 --out-dir dist)"
+          mkdir -p meta
+          python3 ci/release/release_tools.py measure "$path" --out meta/weights.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rdfl-weights
+          path: dist/
+          compression-level: 0
+          retention-days: ${{ fromJSON(needs.meta.outputs.retention) }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rdfl-meta-weights
+          path: meta/weights.json
+          retention-days: ${{ fromJSON(needs.meta.outputs.retention) }}
+
+  env:
+    needs: [meta, source, weights]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64-cuda12
+            os: ubuntu-22.04
+          - platform: macos-arm64-metal
+            os: macos-14
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      TAG: ${{ needs.meta.outputs.tag }}
+      COMMIT: ${{ needs.meta.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Free disk space (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+      - name: Qt/OpenGL runtime libraries (linux, smoke only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libegl1 libxkbcommon0 libglib2.0-0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: tools-python
+        with:
+          python-version: "3.11"
+      - name: Tool Python
+        run: |
+          "${{ steps.tools-python.outputs.python-path }}" -m pip install "pydantic==2.12.5"
+          echo "TOOLS_PY=${{ steps.tools-python.outputs.python-path }}" >> "$GITHUB_ENV"
+      - name: Build the env (conda side, from conda-lock.yml)
+        uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
+        with:
+          micromamba-version: "2.9.0-0"
+          environment-file: envs/${{ matrix.platform }}/conda-lock.yml
+          environment-name: recaster-dfl
+          # Release builds never restore a cache; dry runs cache conda packages only
+          cache-downloads: ${{ needs.meta.outputs.release != 'true' }}
+          cache-downloads-key: conda-pkgs-${{ matrix.platform }}-${{ hashFiles(format('envs/{0}/*', matrix.platform)) }}
+          cache-environment: false
+          # No shell activation: later steps must never see the build env
+          init-shell: none
+          post-cleanup: none
+      - name: Build the env (PyPI side, hash-pinned, no resolver)
+        run: |
+          set -euo pipefail
+          prefix="$MAMBA_ROOT_PREFIX/envs/recaster-dfl"
+          echo "BUILD_PREFIX=$prefix" >> "$GITHUB_ENV"
+          env -u PYTHONPATH PYTHONNOUSERSITE=1 "$prefix/bin/python" -m pip install --no-input \
+            --require-hashes --no-deps --only-binary :all: -r "envs/${PLATFORM}/requirements.txt"
+          env -u PYTHONPATH PYTHONNOUSERSITE=1 "$prefix/bin/python" -m pip check
+      - name: Record the env
+        run: |
+          set -euo pipefail
+          env_id="$("$TOOLS_PY" ci/release/release_tools.py env-id --platform "$PLATFORM")"
+          echo "ENV_ID=$env_id" >> "$GITHUB_ENV"
+          mkdir -p meta dist
+          # Provenance, published next to the env
+          "$MAMBA_EXE" env export -r "$MAMBA_ROOT_PREFIX" -n recaster-dfl --explicit > "dist/rdfl-env-${env_id}.explicit.txt"
+          "$BUILD_PREFIX/bin/python" -m pip list --format=freeze > "dist/rdfl-env-${env_id}.pip-freeze.txt"
+          # Pins, min OS/driver; fails on a forbidden or AGPL-licensed package
+          "$BUILD_PREFIX/bin/python" ci/release/env_info.py "$PLATFORM" > meta/env-info.json
+          cat meta/env-info.json
+      - name: conda-pack
+        run: |
+          set -euo pipefail
+          env_id="$ENV_ID"
+          # The pack tool env from its lock (exact builds, sha256), never a solve
+          "$MAMBA_EXE" create -y -r "$MAMBA_ROOT_PREFIX" -n pack -f ci/release/pack-env/conda-lock.yml
+          # (conda-forge's conda-pack 0.9.2 build reports __version__ 0.0.0; check its record)
+          ls "$MAMBA_ROOT_PREFIX"/envs/pack/conda-meta/conda-pack-0.9.2-*.json
+          archive="dist/rdfl-env-${env_id}.tar.gz"
+          "$MAMBA_EXE" run -r "$MAMBA_ROOT_PREFIX" -n pack conda-pack -p "$BUILD_PREFIX" -o "$archive" --n-threads -1
+          # The smoke must use the packed env only
+          rm -rf "$BUILD_PREFIX"
+          extra="$("$TOOLS_PY" -c 'import json,sys; d=json.load(open("meta/env-info.json")); d.update(platform=sys.argv[1], env_id=sys.argv[2]); print(json.dumps(d))' "$PLATFORM" "$env_id")"
+          "$TOOLS_PY" ci/release/release_tools.py measure "$archive" --extra "$extra" --out "meta/env-${PLATFORM}.json" \
+            --provenance "dist/rdfl-env-${env_id}.explicit.txt" --provenance "dist/rdfl-env-${env_id}.pip-freeze.txt"
+          df -h .
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: rdfl-{source,weights,meta-source,meta-weights}
+          path: dist
+          merge-multiple: true
+      - name: Install like the app (different prefix, safe extract, conda-unpack)
+        run: |
+          set -euo pipefail
+          "$TOOLS_PY" ci/release/release_tools.py make-lock --tag "$TAG" --commit "$COMMIT" \
+            --repo "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" --source dist/source.json --weights dist/weights.json \
+            --env "meta/env-${PLATFORM}.json" --base-url "$PUBLIC_BASE_URL" \
+            --out "$RUNNER_TEMP/lock.json" --manifest-out "$RUNNER_TEMP/manifest.json" > /dev/null
+          "$TOOLS_PY" ci/release/release_tools.py install-check --lock "$RUNNER_TEMP/lock.json" --platform "$PLATFORM" \
+            --artifacts dist --root "$RUNNER_TEMP/runtimes" --out "$RUNNER_TEMP/install.json"
+      - name: Smoke (probe, CPU S3FD/2DFAN, import smoke)
+        run: |
+          set -euo pipefail
+          read_install() { "$TOOLS_PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$RUNNER_TEMP/install.json" "$1"; }
+          python="$(read_install python)"
+          source_dir="$(read_install source_dir)"
+          # The child environment Recaster uses: no PYTHONPATH/PYTHONHOME/QT_*, no user site.
+          # LD_LIBRARY_PATH is setup-python's (tool Python libs), not something a user has.
+          env -u PYTHONPATH -u PYTHONHOME -u PYTHONSTARTUP -u LD_LIBRARY_PATH PYTHONNOUSERSITE=1 \
+            "$python" ci/release/runtime_smoke.py "$source_dir" "$COMMIT"
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f "meta/env-${PLATFORM}.json" ]; then
+            { echo "### env ${PLATFORM}"; echo '```json'; cat "meta/env-${PLATFORM}.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Keep only the env artifact files
+        run: rm -f dist/recaster-dfl-* dist/source.json dist/weights.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rdfl-env-${{ matrix.platform }}
+          path: dist/
+          compression-level: 0
+          retention-days: ${{ fromJSON(needs.meta.outputs.retention) }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rdfl-meta-env-${{ matrix.platform }}
+          path: meta/env-${{ matrix.platform }}.json
+          retention-days: ${{ fromJSON(needs.meta.outputs.retention) }}
+
+  lock:
+    needs: [meta, tools, source, weights, env]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - run: python -m pip install "pydantic==2.12.5"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: rdfl-meta-*
+          path: meta
+          merge-multiple: true
+      - name: Generate and validate dfl_runtime.lock.json
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+          COMMIT: ${{ needs.meta.outputs.commit }}
+          RELEASE: ${{ needs.meta.outputs.release }}
+        run: |
+          set -euo pipefail
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [ "$RELEASE" = true ]; then
+            comment="Generated by the recaster-dfl release CI: ${run_url}"
+          else
+            comment="DRY RUN (${GITHUB_EVENT_NAME}): nothing is published at these URLs. Generated by ${run_url}"
+          fi
+          mkdir -p out
+          envs=(); for f in meta/env-*.json; do envs+=(--env "$f"); done
+          python ci/release/release_tools.py make-lock --tag "$TAG" --commit "$COMMIT" \
+            --repo "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" --source meta/source.json --weights meta/weights.json \
+            "${envs[@]}" --base-url "$PUBLIC_BASE_URL" --comment "$comment" \
+            --out out/dfl_runtime.lock.json --manifest-out out/publish-manifest.json > /dev/null
+          { echo "### dfl_runtime.lock.json (${TAG})"; echo '```json'; cat out/dfl_runtime.lock.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          cat out/dfl_runtime.lock.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dfl-runtime-lock
+          path: out/
+          retention-days: ${{ needs.meta.outputs.release == 'true' && 90 || 3 }}
+
+  publish:
+    # Tag pushes only; the `release` environment adds owner approval and an
+    # rdfl-* tag-only deployment policy, and holds the R2 secrets. PRs (fork
+    # PRs included) and dispatches never reach this job.
+    needs: [meta, source, weights, env, lock]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rdfl-') && needs.meta.outputs.release == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    environment:
+      name: release
+      url: ${{ env.PUBLIC_BASE_URL }}/dfl/${{ needs.meta.outputs.tag }}/dfl_runtime.lock.json
+    concurrency:
+      group: r2-publish
+      cancel-in-progress: false
+    steps:
+      - name: Require the R2 credentials
+        env:
+          HAS_ACCOUNT: ${{ secrets.R2_ACCOUNT_ID != '' }}
+          HAS_KEY: ${{ secrets.R2_ACCESS_KEY_ID != '' }}
+          HAS_SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY != '' }}
+        run: |
+          if [ "$HAS_ACCOUNT" != true ] || [ "$HAS_KEY" != true ] || [ "$HAS_SECRET" != true ]; then
+            echo "::error::R2 secrets (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY) are not all set in the release environment; nothing was uploaded."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: rdfl-{source,weights,env-*}
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dfl-runtime-lock
+          path: out
+      - name: Upload to R2 (no overwrites, lock last)
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: recaster-runtimes
+        run: python3 ci/release/publish_r2.py --manifest out/publish-manifest.json --dist dist --lock out/dfl_runtime.lock.json
+      - name: Check the public URLs
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, urllib.request
+          base = os.environ["PUBLIC_BASE_URL"]
+          manifest = json.load(open("out/publish-manifest.json"))
+          lock_bytes = open("out/dfl_runtime.lock.json", "rb").read()
+          headers = {"User-Agent": "recaster-dfl-ci"}
+          bad = 0
+          # Every manifest object (the lock's artifact URLs are these keys, plus provenance)
+          for entry in manifest:
+              url = f"{base}/{entry['key']}"
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(url, method="HEAD", headers=headers), timeout=30) as r:
+                      size = int(r.headers.get("Content-Length", -1))
+              except Exception as e:
+                  size = -1
+                  print(f"::error::{url}: {e}")
+              if size != entry["size"]:
+                  bad += 1
+                  print(f"::error::{url}: Content-Length {size}, expected {entry['size']}")
+              else:
+                  print(f"ok {url}")
+          # The public lock, byte-identical (open_lock_pr.sh checks this again)
+          url = f"{base}/dfl/{json.loads(lock_bytes)['tag']}/dfl_runtime.lock.json"
+          try:
+              with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as r:
+                  public = r.read()
+          except Exception as e:
+              public = None
+              print(f"::error::{url}: {e}")
+          if public != lock_bytes:
+              bad += 1
+              print(f"::error::{url} is not byte-identical to the lock artifact")
+          else:
+              print(f"ok {url} (identical)")
+          raise SystemExit(1 if bad else 0)
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dfl-runtime-lock-published
+          path: out/dfl_runtime.lock.json
+          retention-days: 90

@@ -1,0 +1,24 @@
+# Files copied verbatim from the Recaster app (PixelMorphDev/recaster, private;
+# GPL-3.0-only, Copyright PixelMorph LLC) so the release CI validates artifacts
+# and the lock with the exact rules the app's runtime manager applies.
+# Do not edit them here. To refresh, run from this repo:
+#   ci/release/sync_vendor.sh <path-to-recaster-checkout>
+# tests/test_release_tools.py fails if a file's sha256 differs from this list.
+#
+# "const:" lines record app constants that ci/release/release_tools.py mirrors
+# (it can't import the app): NAME  <app file>:<app name>  <value as JSON>.
+# check-vendor fails if release_tools.py's value differs from the recorded one;
+# `check-vendor --app <checkout>` (run by sync_vendor.sh) also compares the
+# recorded value with the app source. sync_vendor.sh re-reads the values from
+# the app, so a changed app constant shows up as a check-vendor failure here.
+app_commit: 6e1c720c187c05ea8fc0b99f4fe2f92264f936d2
+4641f8aba19eda7920a2661029c6bb37ab2c9773bdf89afd52bb5f9514b1d454  recaster_app/lock_model.py  dfl_desktop/dfl/lock_model.py
+c50a5eb38d9b5240aca1c7e2a40f820f4182066aa56f99143cfef5c1eca8bfa6  recaster_app/safe_extract.py  dfl_desktop/dfl/safe_extract.py
+const: EXTRACT_SIZE_FACTOR  dfl_desktop/dfl/runtime_manager.py:EXTRACT_SIZE_FACTOR  1.1
+const: EXTRACT_SIZE_SLACK  dfl_desktop/dfl/runtime_manager.py:EXTRACT_SIZE_SLACK  1048576
+const: CONDA_UNPACK_TIMEOUT_S  dfl_desktop/dfl/runtime_manager.py:CONDA_UNPACK_TIMEOUT_S  900
+const: REQUIRED_SOURCE_DIRS  dfl_desktop/dfl/locator.py:_REQUIRED_SOURCE_DIRS  ["mainscripts", "core", "models", "facelib", "DFLIMG"]
+const: WEIGHTS_FILE  dfl_desktop/dfl/locator.py:_WEIGHTS_FILE  "facelib/S3FD.npy"
+const: MIN_WEIGHTS_BYTES  dfl_desktop/dfl/locator.py:_MIN_WEIGHTS_BYTES  1024
+const: DROP_ENV_KEYS  dfl_desktop/dfl/runner.py:_DROP_ENV_KEYS  ["PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONEXECUTABLE", "RECASTER_BRIDGE", "RECASTER_RUN_DIR", "RECASTER_RUN_ID", "RECASTER_PROTOCOL", "RECASTER_HEARTBEAT_S", "RECASTER_BRIDGE_OWNER_PID"]
+const: DROP_ENV_PREFIXES  dfl_desktop/dfl/runner.py:_DROP_ENV_PREFIXES  ["QT_", "QTWEBENGINE_", "NN_"]
