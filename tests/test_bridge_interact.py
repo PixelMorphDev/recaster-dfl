@@ -97,7 +97,7 @@ class BridgeRunTests(unittest.TestCase):
         self.assertEqual(types[-1], "done")
         hello = events[0]
         self.assertEqual((hello["protocol"], hello["bridge_version"], hello["op"], hello["run"]),
-                         (1, "1.1.0", "extract", "run-test"))
+                         (1, "1.2.0", "extract", "run-test"))
         answered = [e for e in events if e["type"] == "answered"]
         self.assertEqual([(a["text"], a["value"], a["source"]) for a in answered], [
             ("Continue extraction?", True, "answers"),
@@ -130,6 +130,34 @@ class BridgeRunTests(unittest.TestCase):
         self.assertEqual([e["type"] for e in events].count("done"), 1)
         self.assertEqual(events[-1]["status"], "error")
         self.assertIn("RuntimeError: boom", proc.stderr)  # the default hook still prints
+
+    def test_merge_settings_answer_the_blank_menu_prompts(self):
+        """MergerConfigMasked.ask_settings: mode, mask mode, two pass and sharpen mode are blank prompts."""
+        report = self.run_dir / "merge_config.json"
+        answers = {"v": 1, "policy": "answers_then_default", "answers": [
+            {"key": "mask_mode", "match": ["Choose mask mode:"], "value": 7, "kind": "int", "context": True},
+            {"key": "sharpen_mode", "match": ["Choose sharpen mode:"], "value": 2, "kind": "int",
+             "context": True},
+            {"key": "erode", "match": ["Choose erode mask modifier"], "value": 25, "kind": "int"},
+            {"key": "sharpen_amount", "match": ["Choose blur/sharpen amount"], "value": 40, "kind": "int"},
+            {"key": "color_transfer", "match": ["Color transfer to predicted face"], "value": "sot-m",
+             "kind": "str"},
+        ]}
+        proc = self._run("merge_settings", answers=answers, env=self._env(STUB_MERGE_CONFIG=str(report)))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        cfg = json.loads(report.read_text())
+        self.assertEqual((cfg["mode"], cfg["mask_mode"], cfg["erode_mask_modifier"], cfg["sharpen_mode"],
+                          cfg["blursharpen_amount"], cfg["color_transfer_mode"], cfg["two_pass_mode"]),
+                         ("overlay", 7, 25, 2, 40, 7, 0))
+        blank = [(e.get("context"), e["value"], e["source"])
+                 for e in _events(self.run_dir) if e["type"] == "answered" and not e["text"].strip()]
+        self.assertEqual(blank, [
+            ("Choose mode:", 1, "default"),
+            ("Choose mask mode:", 7, "answers"),
+            ("Choose two pass mode:", 0, "default"),
+            ("Choose sharpen mode:", 2, "answers"),
+        ])
+        self.assertIn("Choose mask mode: : 7", proc.stdout)
 
     def test_ask_policy_waits_for_control_answer(self):
         (self.run_dir / "answers.json").write_text(json.dumps(
@@ -196,7 +224,7 @@ class ProbeTests(unittest.TestCase):
         lines = [line for line in proc.stdout.splitlines() if line.strip()]
         self.assertEqual(len(lines), 1, proc.stdout + proc.stderr)
         info = json.loads(lines[0])
-        self.assertEqual((info["protocol"], info["bridge_version"]), (1, "1.1.0"))
+        self.assertEqual((info["protocol"], info["bridge_version"]), (1, "1.2.0"))
         self.assertIsNone(info["devices"])
         self.assertEqual(proc.returncode, 0 if info["tf_version"] else 1)
         for key in ("python", "numpy", "cv2", "cv2_has_highgui", "onnxruntime_importable"):

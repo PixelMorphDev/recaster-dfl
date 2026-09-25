@@ -118,6 +118,24 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
   `tests/fixtures/dfl_protocol/v1/` (byte-identical in Recaster).
 - `.github/workflows/ci.yml`: `bridge-tests` job.
 
+- `recaster_bridge/answers.py`, `interact.py` (bridge 1.2.0, protocol still
+  1; Recaster RF-502 slice D2): answers for DFL's blank prompts. The
+  merger's mode, mask mode, two pass and sharpen mode questions are
+  `io.input_int("", ...)` calls right after an `io.log_info("Choose mask
+  mode: \n(0) full\n...")` menu, so no answer could match them and batch
+  merges always took DFL's defaults. An `answers.json` entry with
+  `"context": true` now matches only a blank prompt, against its context:
+  the first non-blank line of the last non-blank `log_info` message before
+  it ("Choose mask mode:"). Other entries never match a blank prompt, and
+  context entries never match a prompt with text, so existing answer files
+  behave as before; bridge 1.1.0 ignores the `context` key and gives those
+  prompts DFL's default. The `answered` event (and a `prompt` event under
+  `answers_then_ask`) carries the context in a new `context` field (Recaster
+  tolerates unknown fields; no new event type), and the terminal line shows
+  it instead of an empty question. `tests/bridge_stub.py merge_settings` runs
+  the real `MergerConfigMasked.ask_settings` (with a stand-in `facelib`, no
+  TensorFlow) under the bridge.
+
 ### Changed
 
 - `core/interact/interact.py`: `RECASTER_BRIDGE=1` selects

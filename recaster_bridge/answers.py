@@ -9,6 +9,16 @@ Matching: case-insensitive substring of the prompt text, answers in file
 order, first hit wins. Recaster's app keeps the same algorithm as a test
 oracle; both are pinned by a parity test.
 
+Blank prompts (bridge 1.2.0): DFL asks some questions with no text at all,
+``io.input_int("", ...)`` right after an ``io.log_info("Choose mode: \n(0)
+original\n...")`` menu (the merger's mode, mask mode, two pass and sharpen
+mode). Those are matched only by answers with ``"context": true``, against
+the prompt's *context*: the first non-blank line of the last non-blank
+``log_info`` message before the prompt ("Choose mode:"). Context answers
+never match a prompt that has text, and other answers never match a blank
+one, so books without context answers behave as in 1.1.0 (where a blank
+prompt always took DFL's default; 1.1.0 ignores the ``context`` key).
+
 Policies:
     answers_then_default  unmatched prompts take DFL's default (never blocks)
     answers_then_ask      unmatched prompts emit a ``prompt`` event and wait
@@ -32,6 +42,7 @@ class Answer:
     value: Any
     kind: str = "any"
     locked: bool = False
+    context: bool = False  # matches a blank prompt by its context (see above)
 
 
 @dataclass(frozen=True)
@@ -40,14 +51,20 @@ class AnswerBook:
     policy: str = POLICY_DEFAULT
     ask_timeout_s: float = 0
 
-    def find(self, text: str) -> Optional[Answer]:
-        return find_answer(self.answers, text)
+    def find(self, text: str, context: Optional[str] = None) -> Optional[Answer]:
+        return find_answer(self.answers, text, context)
 
 
-def find_answer(answers, text: str) -> Optional[Answer]:
-    """First answer with any pattern contained in ``text`` (case-insensitive)."""
-    lowered = (text or "").lower()
+def find_answer(answers, text: str, context: Optional[str] = None) -> Optional[Answer]:
+    """First answer with any pattern contained in ``text`` (case-insensitive).
+
+    A blank ``text`` is matched against ``context`` by context answers only.
+    """
+    blank = not (text or "").strip()
+    lowered = ((context or "") if blank else text).lower()
     for answer in answers:
+        if answer.context != blank:
+            continue
         if any(pattern.lower() in lowered for pattern in answer.match):
             return answer
     return None
@@ -90,6 +107,7 @@ def parse_answers(data: Any) -> Tuple[AnswerBook, List[str]]:
             value=entry.get("value"),
             kind=str(entry.get("kind", "any")),
             locked=bool(entry.get("locked", False)),
+            context=entry.get("context") is True,
         ))
     return AnswerBook(tuple(answers), policy, timeout), problems
 
