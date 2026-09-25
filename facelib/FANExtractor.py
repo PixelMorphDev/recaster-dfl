@@ -241,14 +241,14 @@ class FANExtractor(object):
         return np.matmul (m, pt)[0:2]
 
     def crop(self, image, center, scale, resolution=256.0):
-        ul = self.transform([1, 1], center, scale, resolution).astype( np.int )
-        br = self.transform([resolution, resolution], center, scale, resolution).astype( np.int )
+        ul = self.transform([1, 1], center, scale, resolution).astype( np.int64 )
+        br = self.transform([resolution, resolution], center, scale, resolution).astype( np.int64 )
 
         if image.ndim > 2:
             newDim = np.array([br[1] - ul[1], br[0] - ul[0], image.shape[2]], dtype=np.int32)
             newImg = np.zeros(newDim, dtype=np.uint8)
         else:
-            newDim = np.array([br[1] - ul[1], br[0] - ul[0]], dtype=np.int)
+            newDim = np.array([br[1] - ul[1], br[0] - ul[0]], dtype=np.int64)
             newImg = np.zeros(newDim, dtype=np.uint8)
         ht = image.shape[0]
         wd = image.shape[1]
@@ -265,7 +265,7 @@ class FANExtractor(object):
         a_ch, a_h, a_w = a.shape
 
         b = a.reshape ( (a_ch, a_h*a_w) )
-        c = b.argmax(1).reshape ( (a_ch, 1) ).repeat(2, axis=1).astype(np.float)
+        c = b.argmax(1).reshape ( (a_ch, 1) ).repeat(2, axis=1).astype(np.float64)
         c[:,0] %= a_w
         c[:,1] = np.apply_along_axis ( lambda x: np.floor(x / a_w), 0, c[:,1] )
 
