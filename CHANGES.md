@@ -130,6 +130,22 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
 
 ### Fixed
 
+- `.github/workflows/release.yml`: the first tag run (`rdfl-2026.10.0-rc1`,
+  run 36125530274) failed in both env jobs before building anything, with
+  `You must enable 'cache-downloads' to use 'cache-downloads-key'`. Release
+  mode set `cache-downloads: false` but still passed `cache-downloads-key`;
+  PR dry runs enabled the cache, so they never took that path. Nothing was
+  uploaded. The env build now uses no package cache in either mode (literal
+  `cache-downloads: false`, `cache-environment: false`, no key inputs), so a
+  PR or manual dry run builds with exactly the release's inputs and is a
+  rehearsal of the tag run. The conda-pack tool env was not affected (it is
+  created with `micromamba create` from its lock, not the action).
+  `tests/test_release_qa_guards.py` parses the workflow (PyYAML 6.0.3, pinned
+  in the tools job) and fails if any cache input is an expression, a cache
+  key is passed without its flag set to a literal true, or the env job
+  references the release flag, the event or the ref. `rdfl-2026.10.0-rc1`
+  stays as it is (tags are never moved or reused); the next tag is
+  `rdfl-2026.10.0-rc2`. `ci/release/README.md` has the tag-day checklist.
 - `recaster_bridge/probe.py`: `devices` was always `null`, because
   `Devices.getDevices()` raises until `Devices.initialize_main_env()` has run.
   The probe now runs it first (before it imports TensorFlow, as DFL's main
