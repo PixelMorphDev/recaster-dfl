@@ -5,9 +5,13 @@ Handles ``heartbeat``, ``stop`` and ``answer``. Training commands (save,
 backup, preview, pause, ...) arrive with the training slice; until then they
 are acknowledged with a ``warning`` event. Unknown commands are ignored with
 a warning too. Also runs the heartbeat watchdog (no control line for
-``heartbeat_s`` seconds -> stop) and emits ``alive`` every ``alive_s``.
+``heartbeat_s`` seconds -> stop), the parent watch (with a heartbeat set:
+the parent pid changed, i.e. the caller died and this process was
+reparented -> stop within ``parent_poll_s``) and emits ``alive`` every
+``alive_s``.
 """
 
+import os
 import threading
 import time
 from pathlib import Path
@@ -23,7 +27,8 @@ class ControlReader(threading.Thread):
     def __init__(self, path: Path, writer: EventWriter, *,
                  on_stop: Callable[[bool, str], None],
                  heartbeat_s: float = 0, alive_s: float = 15, poll_s: float = 0.1,
-                 clock: Callable[[], float] = time.monotonic):
+                 parent_poll_s: float = 1.0, clock: Callable[[], float] = time.monotonic,
+                 getppid: Callable[[], int] = os.getppid):
         super().__init__(name="recaster-bridge-control", daemon=True)
         self.path = Path(path)
         self._writer = writer
@@ -40,6 +45,10 @@ class ControlReader(threading.Thread):
         self._answer_cond = threading.Condition()
         self._last_contact = clock()
         self._last_alive = clock()
+        self._parent_poll_s = parent_poll_s
+        self._getppid = getppid
+        self._parent_pid = getppid() if heartbeat_s else None
+        self._last_parent_check = clock()
         self.invalid_lines = 0
 
     # -- public -------------------------------------------------------------
@@ -79,6 +88,14 @@ class ControlReader(threading.Thread):
             self._writer.emit("warning", code="heartbeat_lost",
                               message=f"No heartbeat for {self._heartbeat_s:g}s; stopping")
             self._on_stop(True, "heartbeat")
+        if self._parent_pid is not None and now - self._last_parent_check >= self._parent_poll_s:
+            self._last_parent_check = now
+            ppid = self._getppid()
+            if ppid != self._parent_pid:
+                self._writer.emit("warning", code="parent_lost",
+                                  message=f"Parent process {self._parent_pid} exited (now {ppid}); stopping")
+                self._parent_pid = None  # fire once
+                self._on_stop(True, "parent_exited")
         if self._alive_s and now - self._last_alive >= self._alive_s:
             self._last_alive = now
             self._writer.emit("alive")

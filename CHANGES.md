@@ -130,6 +130,31 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
 
 ### Fixed
 
+- `recaster_bridge/hooks.py`, `control.py` (bridge 1.1.0, protocol still 1;
+  Recaster REC-198): a stop left DFL processes behind when the caller had
+  died. The heartbeat watchdog only SIGTERMed `multiprocessing.active_children()`
+  and then called `os._exit`, so grandchildren, workers that ignore SIGTERM
+  and the resource tracker lived on with PPID 1. Now, when the bridge leads
+  its process group (the Recaster runner starts DFL in its own session),
+  every stop (control `stop`, heartbeat lost, parent exited) writes
+  `done{cancelled}` and closes `events.jsonl`, then SIGTERMs every other
+  group member, waits up to 2 s, SIGKILLs what is left and exits 130. Only
+  a member that survives SIGKILL, or a group that can't be listed (`/proc`
+  on Linux, `ps` elsewhere), makes it `killpg(SIGKILL)` the group, itself
+  included. A bridge that doesn't lead its group never signals it. With a
+  heartbeat set, the control thread also checks its parent pid once a
+  second: when it changes (the caller died and the process was reparented,
+  to pid 1 or a subreaper), it emits `warning{code: "parent_lost"}` and
+  stops with `state{stopping, reason: "parent_exited"}` instead of waiting
+  out the heartbeat timeout. No new event types (Recaster's reader rejects
+  unknown ones); `parent_lost` and `parent_exited` are new values of the
+  free-form `warning.code` and `state.reason`. If DFL's main thread exits
+  while a stop is reaping, the atexit hook waits for the stop to finish.
+  `tests/test_bridge_reap.py` runs a stub with multiprocessing workers, a
+  SIGTERM-ignoring worker, a grandchild and the resource tracker, SIGKILLs
+  its intermediate parent (or stops heartbeating) and checks that the group
+  is empty within 6 s.
+
 - `.github/workflows/release.yml`: the first tag run (`rdfl-2026.10.0-rc1`,
   run 36125530274) failed in both env jobs before building anything, with
   `You must enable 'cache-downloads' to use 'cache-downloads-key'`. Release

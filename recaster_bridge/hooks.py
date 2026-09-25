@@ -12,17 +12,27 @@ The session guarantees exactly one ``done`` event for Python-level exits:
     - exit(code)             -> done{ok} for 0, done{error} otherwise (atexit)
     - control stop           -> state{stopping} + done{cancelled}, then the
                                 process exits with EXIT_CANCELLED
+
+A stop (control, heartbeat lost, parent exited) also reaps the process
+group when this process leads it (the Recaster runner starts DFL in its own
+session): SIGTERM to every other member, ``REAP_TERM_GRACE_S`` to exit, then
+SIGKILL. This process goes last: ``done`` is written and the event file
+closed first, and only a member that survives SIGKILL (or a group that
+can't be listed) makes it ``killpg(SIGKILL)`` its own group, itself included.
 """
 
 import atexit
 import builtins
 import multiprocessing
 import os
+import signal
+import subprocess
 import sys
 import threading
+import time
 import traceback
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import List, Mapping, Optional
 
 from . import (ANSWERS_FILE, CONTROL_FILE, ENV_HEARTBEAT, ENV_OWNER_PID, ENV_RUN_ID,
                EVENTS_FILE, read_version, run_dir_from_env)
@@ -31,6 +41,10 @@ from .control import ControlReader
 from .protocol import EventWriter
 
 EXIT_CANCELLED = 130
+REAP_TERM_GRACE_S = 2.0   # SIGTERM -> this long -> SIGKILL
+REAP_KILL_WAIT_S = 1.0    # SIGKILL -> this long for the members to go
+_REAP_POLL_S = 0.1
+_PS_TIMEOUT_S = 5
 
 _session: Optional["BridgeSession"] = None
 _session_lock = threading.Lock()
@@ -60,6 +74,115 @@ def _read_dfl_commit(source_dir: Path) -> Optional[str]:
     return None
 
 
+def _has_proc() -> bool:
+    return os.path.exists("/proc/self/stat")
+
+
+def group_members(pgid: int, exclude: int) -> Optional[List[int]]:
+    """Live pids in process group ``pgid`` other than ``exclude`` (zombies skipped).
+
+    None when the group can't be listed. Linux reads ``/proc``; elsewhere
+    ``ps`` (its own pid is left out: it runs in this group).
+    """
+    if _has_proc():
+        out = []
+        try:
+            names = os.listdir("/proc")
+        except OSError:
+            return None
+        for name in names:
+            if not name.isdigit() or int(name) == exclude:
+                continue
+            try:
+                with open(f"/proc/{name}/stat", "rb") as f:
+                    stat = f.read().decode("utf-8", "replace")
+            except OSError:
+                continue  # exited meanwhile
+            # "pid (comm) state ppid pgrp ...": comm may hold spaces and parens
+            fields = stat.rpartition(")")[2].split()
+            if len(fields) >= 3 and fields[0] not in ("Z", "X") and fields[2] == str(pgid):
+                out.append(int(name))
+        return out
+    ps = "/bin/ps" if os.path.exists("/bin/ps") else "ps"
+    try:
+        proc = subprocess.Popen([ps, "-A", "-o", "pid=,pgid=,stat="], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        text, _ = proc.communicate(timeout=_PS_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    out = []
+    for line in text.decode("utf-8", "replace").splitlines():
+        parts = line.split()
+        if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        pid = int(parts[0])
+        if int(parts[1]) == pgid and pid not in (exclude, proc.pid) and not parts[2].startswith("Z"):
+            out.append(pid)
+    return out
+
+
+def _signal_all(pids: List[int], sig: int) -> None:
+    for pid in pids:
+        try:
+            os.kill(pid, sig)
+        except OSError:
+            pass
+
+
+def _wait_group_empty(pgid: int, me: int, timeout: float) -> Optional[List[int]]:
+    deadline = time.monotonic() + timeout
+    while True:
+        members = group_members(pgid, me)
+        if not members or time.monotonic() >= deadline:
+            return members
+        time.sleep(_REAP_POLL_S)
+
+
+def leads_process_group() -> bool:
+    if os.name == "nt":
+        return False
+    try:
+        return os.getpgrp() == os.getpid()
+    except OSError:
+        return False
+
+
+def reap_process_group(term_grace_s: float = REAP_TERM_GRACE_S,
+                       kill_wait_s: float = REAP_KILL_WAIT_S) -> bool:
+    """SIGTERM, then SIGKILL, every other member of this process's group.
+
+    Only when this process leads the group (otherwise the group belongs to
+    whoever started it). True when nothing else is left in the group.
+    """
+    if not leads_process_group():
+        return True
+    me = pgid = os.getpid()
+    members = group_members(pgid, me)
+    if members is None:
+        return False
+    if not members:
+        return True
+    _signal_all(members, signal.SIGTERM)
+    members = _wait_group_empty(pgid, me, term_grace_s)
+    if members is None:
+        return False
+    if members:
+        _signal_all(members, signal.SIGKILL)
+        members = _wait_group_empty(pgid, me, kill_wait_s)
+    return members == []
+
+
+def kill_own_process_group() -> None:
+    """Last resort: SIGKILL the whole group this process leads, itself included."""
+    if leads_process_group():
+        try:
+            os.killpg(os.getpgrp(), signal.SIGKILL)
+        except OSError:
+            pass
+
+
 class BridgeSession:
     def __init__(self, run_dir: Path, run_id: str, *, heartbeat_s: float = 0,
                  op: Optional[str] = None, exit_func=os._exit):
@@ -73,6 +196,7 @@ class BridgeSession:
         self._done = False
         self._exit_code: Optional[int] = None
         self._stopping = False
+        self._stop_thread: Optional[threading.Thread] = None
         self.control = ControlReader(self.run_dir / CONTROL_FILE, self.writer,
                                      on_stop=self.request_stop, heartbeat_s=heartbeat_s)
 
@@ -113,12 +237,15 @@ class BridgeSession:
 
         Called from the control thread. DFL's worker processes are terminated
         first (they are daemonic and would otherwise die with the parent only
-        on a clean interpreter exit, which os._exit skips).
+        on a clean interpreter exit, which os._exit skips), then the rest of
+        the process group is reaped (grandchildren, workers that ignore
+        SIGTERM, multiprocessing's resource tracker).
         """
         with self._done_lock:
             if self._stopping or self._done:
                 return
             self._stopping = True
+            self._stop_thread = threading.current_thread()
         self.writer.emit("state", state="stopping", reason=reason)
         for child in multiprocessing.active_children():
             try:
@@ -127,7 +254,13 @@ class BridgeSession:
                 pass
         self.finish("cancelled", EXIT_CANCELLED)
         self.control.halt()
-        self.writer.close()
+        self.writer.close()  # nothing is written after done, even while the group is reaped
+        try:
+            group_clean = reap_process_group()
+        except Exception:
+            group_clean = False
+        if not group_clean:
+            kill_own_process_group()
         self._exit_func(EXIT_CANCELLED)
 
     # -- exit hooks -----------------------------------------------------------
@@ -167,6 +300,11 @@ class BridgeSession:
         return exit
 
     def _atexit(self) -> None:
+        stop_thread = self._stop_thread
+        if stop_thread is not None and stop_thread is not threading.current_thread():
+            # DFL's main thread ended while a stop reaps the group (a killed worker
+            # can make it exit): let the stop finish; it ends the process
+            stop_thread.join(REAP_TERM_GRACE_S + REAP_KILL_WAIT_S + 2 * _PS_TIMEOUT_S)
         code = self._exit_code
         if code is None or code is True:
             code_int = 0

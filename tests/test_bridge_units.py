@@ -6,9 +6,13 @@ Run from the repo root:  python -m unittest discover -s tests -v
 import contextlib
 import io
 import json
+import os
+import signal
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 from pathlib import Path
@@ -17,6 +21,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from recaster_bridge import hooks as hooks_mod  # noqa: E402
 from recaster_bridge import probe as probe_mod  # noqa: E402
 from recaster_bridge import read_version, run_dir_from_env  # noqa: E402
 from recaster_bridge.answers import (POLICY_ASK, POLICY_DEFAULT, Answer, find_answer,  # noqa: E402
@@ -34,7 +39,7 @@ def _events(path):
 
 class VersionTests(unittest.TestCase):
     def test_version_file(self):
-        self.assertEqual(read_version(), {"protocol": 1, "bridge": "1.0.0"})
+        self.assertEqual(read_version(), {"protocol": 1, "bridge": "1.1.0"})
         self.assertEqual(PROTOCOL, 1)
 
     def test_run_dir_needs_flag_and_existing_dir(self):
@@ -237,6 +242,160 @@ class ControlReaderTests(unittest.TestCase):
         self.assertEqual(self.stops, [(False, "control")])
         self.assertEqual(self.reader.invalid_lines, 1)
 
+
+
+class ParentWatchTests(unittest.TestCase):
+    """The parent watch: a reparented bridge (caller died) stops within parent_poll_s."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        (root / "control.jsonl").write_text("")
+        self.events = root / "events.jsonl"
+        self.writer = EventWriter(self.events, "r")
+        self.stops = []
+        self.now = [0.0]
+        self.ppid = [4242]
+        self.root = root
+
+    def tearDown(self):
+        self.writer.close()
+        self.tmp.cleanup()
+
+    def _reader(self, heartbeat_s):
+        return ControlReader(self.root / "control.jsonl", self.writer,
+                             on_stop=lambda save, reason: self.stops.append((save, reason)),
+                             heartbeat_s=heartbeat_s, alive_s=0, parent_poll_s=1.0,
+                             clock=lambda: self.now[0], getppid=lambda: self.ppid[0])
+
+    def test_parent_exit_stops_once(self):
+        reader = self._reader(heartbeat_s=60)
+        self.now[0] = 0.5
+        self.ppid[0] = 1
+        reader.poll_once()
+        self.assertEqual(self.stops, [])  # checked at most once per parent_poll_s
+        self.now[0] = 1.0
+        reader.poll_once()
+        self.assertEqual(self.stops, [(True, "parent_exited")])
+        warning = _events(self.events)[-1]
+        self.assertEqual((warning["type"], warning["code"]), ("warning", "parent_lost"))
+        self.assertIn("4242", warning["message"])
+        self.now[0] = 5.0
+        reader.poll_once()
+        self.assertEqual(len(self.stops), 1)
+
+    def test_any_new_parent_counts(self):
+        # Linux may reparent to a subreaper rather than pid 1
+        reader = self._reader(heartbeat_s=60)
+        self.ppid[0] = 777
+        self.now[0] = 2.0
+        reader.poll_once()
+        self.assertEqual(self.stops, [(True, "parent_exited")])
+
+    def test_same_parent_never_stops(self):
+        reader = self._reader(heartbeat_s=60)
+        for t in range(1, 30):
+            self.now[0] = float(t)
+            self._append_heartbeat()
+            reader.poll_once()
+        self.assertEqual(self.stops, [])
+
+    def test_no_heartbeat_no_parent_watch(self):
+        # An unsupervised run (no heartbeat asked for) keeps the old behaviour
+        reader = self._reader(heartbeat_s=0)
+        self.ppid[0] = 1
+        self.now[0] = 10.0
+        reader.poll_once()
+        self.assertEqual(self.stops, [])
+        self.assertEqual(_events(self.events), [])
+
+    def _append_heartbeat(self):
+        with open(self.root / "control.jsonl", "a") as f:
+            f.write('{"v":1,"seq":1,"cmd":"heartbeat"}\n')
+
+
+@unittest.skipIf(os.name == "nt", "POSIX process groups")
+class GroupMembersTests(unittest.TestCase):
+    """hooks.group_members() over /proc (Linux) and ps (macOS, forced elsewhere)."""
+
+    def setUp(self):
+        # Two sleepers in a session of their own: the leader and one child
+        code = "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); time.sleep(60)"
+        self.leader = subprocess.Popen([sys.executable, "-c", code], start_new_session=True)
+        self.addCleanup(self._kill)
+        deadline = time.time() + 30
+        while time.time() < deadline and len(hooks_mod.group_members(self.leader.pid, -1) or []) < 2:
+            time.sleep(0.05)
+
+    def _kill(self):
+        try:
+            os.killpg(self.leader.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        self.leader.wait(10)
+
+    def _check(self):
+        members = hooks_mod.group_members(self.leader.pid, -1)
+        self.assertEqual(len(members), 2, members)
+        self.assertIn(self.leader.pid, members)
+        self.assertEqual(hooks_mod.group_members(self.leader.pid, self.leader.pid),
+                         [m for m in members if m != self.leader.pid])
+        mine = hooks_mod.group_members(os.getpgrp(), os.getpid())
+        self.assertNotIn(os.getpid(), mine)
+        self.assertNotIn(self.leader.pid, mine)
+
+    def test_lists_the_group(self):
+        self._check()
+
+    def test_ps_path(self):
+        with mock.patch.object(hooks_mod, "_has_proc", return_value=False):
+            self._check()
+
+    @unittest.skipUnless(os.path.exists("/proc/self/stat"), "needs /proc")
+    def test_proc_path(self):
+        with mock.patch.object(hooks_mod, "_has_proc", return_value=True):
+            self._check()
+
+    def test_killed_group_is_empty(self):
+        os.killpg(self.leader.pid, signal.SIGKILL)
+        self.leader.wait(10)  # the leader is our child; its child is reparented and reaped
+        deadline = time.time() + 10
+        while time.time() < deadline and hooks_mod.group_members(self.leader.pid, -1):
+            time.sleep(0.05)
+        self.assertEqual(hooks_mod.group_members(self.leader.pid, -1), [])
+
+    def test_unlistable_group_is_none(self):
+        with mock.patch.object(hooks_mod, "_has_proc", return_value=False), \
+                mock.patch.object(hooks_mod.subprocess, "Popen", side_effect=OSError("no ps")):
+            self.assertIsNone(hooks_mod.group_members(self.leader.pid, -1))
+
+
+class ReapGuardTests(unittest.TestCase):
+    def test_no_reap_unless_group_leader(self):
+        with mock.patch.object(hooks_mod, "leads_process_group", return_value=False), \
+                mock.patch.object(hooks_mod.os, "kill") as kill, \
+                mock.patch.object(hooks_mod.os, "killpg") as killpg:
+            self.assertTrue(hooks_mod.reap_process_group())
+            hooks_mod.kill_own_process_group()
+        kill.assert_not_called()
+        killpg.assert_not_called()
+
+    def test_unlistable_group_is_not_clean(self):
+        with mock.patch.object(hooks_mod, "leads_process_group", return_value=True), \
+                mock.patch.object(hooks_mod, "group_members", return_value=None), \
+                mock.patch.object(hooks_mod.os, "kill") as kill:
+            self.assertFalse(hooks_mod.reap_process_group())
+        kill.assert_not_called()
+
+    def test_term_then_kill_the_stubborn(self):
+        listings = iter([[11, 12], [12], [12], []])
+        with mock.patch.object(hooks_mod, "leads_process_group", return_value=True), \
+                mock.patch.object(hooks_mod, "group_members", side_effect=lambda *a: next(listings)), \
+                mock.patch.object(hooks_mod.time, "sleep"), \
+                mock.patch.object(hooks_mod.os, "kill") as kill:
+            self.assertTrue(hooks_mod.reap_process_group(term_grace_s=0, kill_wait_s=5))
+        self.assertEqual(kill.call_args_list, [mock.call(11, signal.SIGTERM), mock.call(12, signal.SIGTERM),
+                                               mock.call(12, signal.SIGKILL)])
 
 
 class ProbeDeviceTests(unittest.TestCase):
