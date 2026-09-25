@@ -97,7 +97,7 @@ class BridgeRunTests(unittest.TestCase):
         self.assertEqual(types[-1], "done")
         hello = events[0]
         self.assertEqual((hello["protocol"], hello["bridge_version"], hello["op"], hello["run"]),
-                         (1, "1.0.0", "extract", "run-test"))
+                         (1, "1.1.0", "extract", "run-test"))
         answered = [e for e in events if e["type"] == "answered"]
         self.assertEqual([(a["text"], a["value"], a["source"]) for a in answered], [
             ("Continue extraction?", True, "answers"),
@@ -196,7 +196,7 @@ class ProbeTests(unittest.TestCase):
         lines = [line for line in proc.stdout.splitlines() if line.strip()]
         self.assertEqual(len(lines), 1, proc.stdout + proc.stderr)
         info = json.loads(lines[0])
-        self.assertEqual((info["protocol"], info["bridge_version"]), (1, "1.0.0"))
+        self.assertEqual((info["protocol"], info["bridge_version"]), (1, "1.1.0"))
         self.assertIsNone(info["devices"])
         self.assertEqual(proc.returncode, 0 if info["tf_version"] else 1)
         for key in ("python", "numpy", "cv2", "cv2_has_highgui", "onnxruntime_importable"):
