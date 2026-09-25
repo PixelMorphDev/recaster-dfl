@@ -64,6 +64,8 @@ category.
 - `facelib/*.npy` are no longer tracked (now in `.gitignore`). Their
   sha256s are in `WEIGHTS.sha256`, and they ship as a separate artifact.
   They are still present in upstream's git history.
+- `.github/ISSUE_TEMPLATE.md`: upstream's issue template, which doesn't
+  apply to this repository.
 
 ### Added
 
@@ -76,6 +78,8 @@ category.
   tf2onnx 1.14.0 / onnx 1.12.0.
 - `ci/import_smoke.py` and `.github/workflows/ci.yml`: CPU import smoke and
   a weights-free source-tarball build.
+- conda-lock files (`envs/<platform>/conda-lock.yml`) are not committed
+  yet. Generating them from each `environment.yml` is planned.
 - `NOTICE.md`, `CHANGES.md`, `WEIGHTS.sha256`, and a recaster-dfl section in
   `README.md`.
 

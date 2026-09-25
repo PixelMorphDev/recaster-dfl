@@ -139,11 +139,12 @@ class SegIEPolys():
                 continue
             # Auto-scale normalized coordinates to pixel space.
             # Stock DFL's XSegEditor stores polys in pixel coords (values up to
-            # image dimensions). MVE and Recaster's Face Editor store them as
-            # normalized floats in [0, 1]. Without scaling, the .astype(int32)
-            # truncation below collapses every normalized point to [0, 0] and
-            # cv2.fillPoly draws a zero-area polygon — the training mask ends
-            # up all zeros and XSeg collapses to predicting empty masks.
+            # image dimensions). Some external editors (e.g. Recaster's Face
+            # Editor) store them as normalized floats in [0, 1]; without
+            # scaling, the .astype(int32) truncation below collapses every
+            # normalized point to [0, 0] and cv2.fillPoly draws a zero-area
+            # polygon — the training mask ends up all zeros and XSeg collapses
+            # to predicting empty masks.
             if pts.size and pts.max() <= 1.0 and pts.min() >= 0.0:
                 pts = pts * np.array([w, h], dtype=np.float32)
             pts = pts.astype(np.int32)

@@ -1,8 +1,7 @@
 # NOTICE
 
 recaster-dfl is a modified version of DeepFaceLab. It is maintained by
-PixelMorph LLC as the face-extraction, training and merging runtime used by
-the Recaster desktop application.
+PixelMorph LLC.
 
 ## Lineage
 
@@ -68,7 +67,9 @@ modify them. Upstream states no separate license for them, and they are
 distributed on the same terms as this repository. They are no longer
 tracked at the tip of this repository. Release builds ship them as a
 separate checksummed artifact. recaster-dfl makes no representation about
-the terms of the datasets these models were originally trained on.
+the terms of the datasets these models were originally trained on. No
+representation is made that the model weights, or output produced with
+them, are suitable for commercial use.
 
 ## Names
 

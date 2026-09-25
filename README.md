@@ -5,8 +5,7 @@ recaster-dfl is a GPL-3.0 fork of
 [MachineEditor/DeepFaceLab-MVE](https://github.com/MachineEditor/DeepFaceLab-MVE)
 at commit `6e36689`. MVE is itself a fork of
 [iperov/DeepFaceLab](https://github.com/iperov/DeepFaceLab). recaster-dfl is
-the pinned DeepFaceLab runtime used by the Recaster desktop application.
-It is not affiliated with or endorsed by the upstream projects (see
+maintained by PixelMorph LLC. It is not affiliated with or endorsed by the upstream projects (see
 [NOTICE.md](NOTICE.md)).
 
 ## Relationship to upstream
@@ -21,20 +20,15 @@ It is not affiliated with or endorsed by the upstream projects (see
 - The command-line interface (`python main.py <op> ...`) is upstream's,
   unchanged.
 
-## How Recaster uses it
+## Usage
 
-Recaster runs recaster-dfl as a separate program. It starts
-`<runtime env>/bin/python -u main.py <op> ...` with the working directory
-set to this tree, and it communicates only through command-line arguments,
-files and process output. Recaster's own process doesn't import this code.
-Recaster's older in-process integration is being migrated to this model.
+recaster-dfl runs as a standalone program: `python main.py <command> …`.
+See the upstream documentation for commands.
 
 Each tagged release is expected to produce three artifacts:
 - a weights-free source tarball
 - a separate, content-addressed weights artifact
 - per-platform environment bundles built from `envs/`
-
-Recaster pins all of them by sha256.
 
 ## Running it directly
 
