@@ -49,6 +49,9 @@ class Devices(object):
             if mem > idx_mem:
                 result = device
                 idx_mem = mem
+        # Fallback: if all devices report 0 memory (e.g., Metal GPU), return first device
+        if result is None and len(self.devices) > 0:
+            result = self.devices[0]
         return result
 
     def get_worst_device(self):
@@ -59,6 +62,9 @@ class Devices(object):
             if mem < idx_mem:
                 result = device
                 idx_mem = mem
+        # Fallback: if no device was selected (all have sys.maxsize comparison issue), return first device
+        if result is None and len(self.devices) > 0:
+            result = self.devices[0]
         return result
 
     def get_device_by_index(self, idx):
