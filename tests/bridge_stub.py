@@ -27,37 +27,43 @@ def child_report(path):
     # A spawned DFL worker process: re-imports core.interact with the same env
     sys.path.insert(0, str(ROOT))
     from core.interact import interact as child_io
-    Path(path).write_text(type(child_io).__name__)
+    _write_text(path, type(child_io).__name__)
     time.sleep(30)
 
 
 def worker_plain(ready):
-    Path(ready).write_text(str(os.getpid()))
+    _write_text(ready, str(os.getpid()))
     time.sleep(120)
 
 
 def worker_ignores_sigterm(ready):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    Path(ready).write_text(str(os.getpid()))
+    _write_text(ready, str(os.getpid()))
     time.sleep(120)
 
 
 def worker_with_grandchild(ready):
     grandchild = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
-    Path(ready).write_text(str(grandchild.pid))
+    _write_text(ready, str(grandchild.pid))
     time.sleep(120)
 
 
 def worker_holding(lock, ready):
-    Path(ready).write_text(str(os.getpid()))
+    _write_text(ready, str(os.getpid()))
     with lock:
         time.sleep(120)
 
 
-def _write_json(path, data):
+def _write_text(path, text):
+    # Readers poll for the file and read it at once: it must appear whole
+    path = Path(path)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data))
+    tmp.write_text(text)
     os.replace(tmp, path)
+
+
+def _write_json(path, data):
+    _write_text(path, json.dumps(data))
 
 
 def start_semlock(report):
@@ -123,7 +129,7 @@ if __name__ == "__main__":
     elif scenario == "slow":
         child = multiprocessing.Process(target=child_report, args=(os.environ["STUB_CHILD_REPORT"],), daemon=True)
         child.start()
-        Path(os.environ["STUB_CHILD_PID"]).write_text(str(child.pid))
+        _write_text(os.environ["STUB_CHILD_PID"], str(child.pid))
         io.progress_bar("Extracting", 1000)
         for _ in range(1000):
             time.sleep(0.05)

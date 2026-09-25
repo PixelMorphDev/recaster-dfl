@@ -29,10 +29,12 @@ ANSWERS = {"v": 1, "policy": "answers_then_default", "ask_timeout_s": 0, "answer
 
 # Starts argv[3:] as a session leader, records its pid in argv[1], waits for it
 INTERMEDIATE = """
-import subprocess, sys
+import os, subprocess, sys
 child = subprocess.Popen(sys.argv[2:], start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=open(sys.argv[1] + ".err", "w"))
-open(sys.argv[1], "w").write(str(child.pid))
+with open(sys.argv[1] + ".tmp", "w") as f:
+    f.write(str(child.pid))
+os.replace(sys.argv[1] + ".tmp", sys.argv[1])
 child.wait()
 """
 
