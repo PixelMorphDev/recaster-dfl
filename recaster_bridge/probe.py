@@ -39,15 +39,34 @@ def _cv2_has_highgui():
 
 
 def _devices():
+    """DFL's device table, as the trainer sees it; None (with the reason on stderr) if it fails.
+
+    initialize_main_env() enumerates in a multiprocessing child and pops
+    CUDA_VISIBLE_DEVICES first, like DFL's own main process; getDevices()
+    raises until it has run. Call it before this process imports TensorFlow
+    (a fork after TF has started its threads can hang the child), and keep the
+    __main__ guard below (spawn start method on macOS/Windows). Skipped without
+    an importable TensorFlow: the child would die and initialize_main_env()
+    would block on its queue forever.
+    """
+    if importlib.util.find_spec("tensorflow") is None:
+        print("recaster_bridge.probe: device enumeration skipped: tensorflow is not importable",
+              file=sys.stderr, flush=True)
+        return None
     try:
         from core.leras import device
+        device.Devices.initialize_main_env()
         return [{"index": d.index, "name": d.name, "total_mem_gb": round(d.total_mem_gb, 2)}
                 for d in device.Devices.getDevices()]
-    except Exception:
+    except Exception as e:
+        print(f"recaster_bridge.probe: device enumeration failed: {type(e).__name__}: {e}",
+              file=sys.stderr, flush=True)
         return None
 
 
 def probe(with_devices: bool = True) -> dict:
+    # Devices first: DFL's order (device init, then TensorFlow in this process)
+    devices = _devices() if with_devices else None
     version = read_version()
     return {
         "protocol": version["protocol"],
@@ -60,7 +79,7 @@ def probe(with_devices: bool = True) -> dict:
         "cv2": _version("cv2"),
         "cv2_has_highgui": _cv2_has_highgui(),
         "onnxruntime_importable": importlib.util.find_spec("onnxruntime") is not None,
-        "devices": _devices() if with_devices else None,
+        "devices": devices,
     }
 
 

@@ -47,6 +47,17 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
   `Extractor.main` already supported (`FaceType.fromString`) but the CLI
   rejected.
 
+### Fixed
+
+- `recaster_bridge/probe.py`: `devices` was always `null`, because
+  `Devices.getDevices()` raises until `Devices.initialize_main_env()` has run.
+  The probe now runs it first (before it imports TensorFlow, as DFL's main
+  does), so it reports DFL's device table (`METAL` on Apple Silicon, CUDA
+  GPUs, `[]` on CPU-only hosts). When enumeration fails it still reports
+  `null` and prints the reason to stderr. It is skipped when TensorFlow isn't
+  importable, since the enumeration child would die and
+  `initialize_main_env()` would wait on it forever.
+
 ## 2026-09-25: baseline
 
 First recaster-dfl baseline. The code changes are forward-ported from the

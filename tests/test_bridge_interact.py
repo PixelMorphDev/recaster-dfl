@@ -4,6 +4,7 @@
 Needs DFL's interact deps (numpy, opencv-python, tqdm, colorama); no
 TensorFlow. ``tests/bridge_stub.py`` stands in for ``main.py <op>``.
 """
+import importlib.util
 import json
 import os
 import signal
@@ -200,6 +201,19 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0 if info["tf_version"] else 1)
         for key in ("python", "numpy", "cv2", "cv2_has_highgui", "onnxruntime_importable"):
             self.assertIn(key, info)
+
+    @unittest.skipUnless(importlib.util.find_spec("tensorflow"), "needs TensorFlow (a runtime env)")
+    def test_probe_lists_devices_with_tensorflow(self):
+        # CUDA_VISIBLE_DEVICES="" like the release smoke: DFL's device init pops it
+        env = dict(_base_env(), CUDA_VISIBLE_DEVICES="", TF_CPP_MIN_LOG_LEVEL="2")
+        proc = subprocess.run([sys.executable, "-u", "-m", "recaster_bridge.probe", "--json"],
+                              cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=600)
+        info = json.loads([line for line in proc.stdout.splitlines() if line.startswith("{")][-1])
+        self.assertIsInstance(info["devices"], list, proc.stderr)
+        for dev in info["devices"]:
+            self.assertEqual(set(dev), {"index", "name", "total_mem_gb"})
+        if sys.platform == "darwin" and importlib.util.find_spec("tensorflow_metal"):
+            self.assertIn("METAL", [d["name"] for d in info["devices"]])
 
 
 if __name__ == "__main__":
