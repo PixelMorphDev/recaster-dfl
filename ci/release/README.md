@@ -21,8 +21,10 @@ A tag push of `rdfl-YYYY.M.P[-rcN]` on a main commit is a release. Pull
 requests, `workflow_dispatch` and anything else are dry runs, tagged
 `rdfl-dryrun-<sha12>`.
 
-Only the tag name, artifact retention, the lock's comment and the `publish`
-job differ between the two. The build inputs are the same: the env build
+Only the tag name, artifact retention, the lock's comment, the `publish`
+job, and `meta`'s release-only checks (tag format and "commit is on main",
+exercised by rc1) differ between the two. The build inputs are the same
+cache settings in both modes; today the env build
 never uses a package cache (`cache-downloads: false`,
 `cache-environment: false`, no key inputs), so every dry run is a rehearsal
 of the release build. `tests/test_release_qa_guards.py`
@@ -37,6 +39,9 @@ release-only input combination (`cache-downloads: false` with
 
 Tags are never moved, deleted or reused, even when the run failed before
 uploading. Fix forward with a PR and tag the next `-rcN`.
+
+R2 has an indefinite bucket lock on `dfl/`: anything a tag uploads there can
+never be overwritten or deleted. A partially published tag stays that way.
 
 | Tag | Commit | Run | Result |
 |-----|--------|-----|--------|
@@ -65,8 +70,14 @@ uploading. Fix forward with a PR and tag the next `-rcN`.
    run summary (tag, commit, both envs, no dry-run comment), then approve the
    `publish` deployment.
 7. `publish` checks every object and the public lock after upload. If it
-   fails part-way, re-running the job is safe: identical objects are skipped
-   and nothing is overwritten.
+   fails part-way, use **Re-run failed jobs**: it re-runs only `publish` with
+   this run's artifacts, identical objects are skipped and nothing is
+   overwritten. It needs the owner's approval again and only works while the
+   run's artifacts exist (14 days). **Never use "Re-run all jobs" on a tag
+   run**: it rebuilds the envs with different bytes, `publish` refuses to
+   overwrite them, and because R2 has an indefinite bucket lock on `dfl/`
+   the objects already uploaded for that tag can never be removed. Burn the
+   tag (step 9) and tag the next `-rcN` instead.
 8. Add the tag to the table above (PR), then open the Recaster lock PR from
    the run: `ci/release/open_lock_pr.sh <run-id> <recaster-checkout>`.
 9. If the tag run fails, leave the tag alone, record it in the table as used,
