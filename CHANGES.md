@@ -21,8 +21,10 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
   objects. Pull requests and manual runs are dry runs with no secrets and
   no upload. `ci/release/open_lock_pr.sh` opens the Recaster lock PR from a
   published run.
-- `tests/test_release_tools.py`: release tooling tests (`unpacked_size`,
-  weights determinism, lock validation, install emulation, vendored files).
+- `tests/test_release_tools.py`, `tests/test_publish_r2.py`: release tooling
+  tests (`unpacked_size`, weights determinism, lock validation, install
+  emulation, vendored files, and no-overwrite R2 publishing against a fake
+  `aws` cli).
 
 - `recaster_bridge/` (protocol 1, bridge 1.0.0): a file-based JSON-lines
   side channel for running DFL out of process. Active only when
