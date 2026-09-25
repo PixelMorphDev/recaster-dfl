@@ -1,3 +1,5 @@
+# Modified by PixelMorph LLC, 2026-09-25: NumPy 1.24+ dtype alias (apply_xseg).
+# Part of recaster-dfl, derived from MachineEditor/DeepFaceLab-MVE @ 6e36689 (GPL-3.0). See CHANGES.md.
 import json
 import shutil
 import traceback
@@ -103,7 +105,7 @@ def apply_xseg(input_path, model_path):
         
         if face_type is not None and img_face_type != face_type or img_face_type == FaceType.CUSTOM:
             mask = cv2.resize(mask, (w, w), interpolation=cv2.INTER_LANCZOS4)
-            mask = cv2.warpAffine( mask, mat, (w,w), np.zeros( (h,w,c), dtype=np.float), cv2.WARP_INVERSE_MAP | cv2.INTER_LANCZOS4)
+            mask = cv2.warpAffine( mask, mat, (w,w), np.zeros( (h,w,c), dtype=np.float64), cv2.WARP_INVERSE_MAP | cv2.INTER_LANCZOS4)
             mask = cv2.resize(mask, (xseg_res, xseg_res), interpolation=cv2.INTER_LANCZOS4)
         mask[mask < 0.5]=0
         mask[mask >= 0.5]=1    

@@ -17,9 +17,11 @@ category.
   - `XSegEditor/XSegEditor.py`, `core/imagelib/text.py`, `core/qtex/qtex.py`,
     `facelib/FANExtractor.py`, `facelib/LandmarksProcessor.py`,
     `facelib/S3FDExtractor.py`, `mainscripts/Extractor.py`
-  - Known remaining uses, to be fixed in a later change:
-    `core/imagelib/text.py` (`get_draw_text_lines`) and
-    `mainscripts/XSegUtil.py` (`apply_xseg`, when face types differ).
+  - Two further `np.float` uses, replaced with `np.float64`:
+    `core/imagelib/text.py` (`get_draw_text_lines`, used by manual extract)
+    and `mainscripts/XSegUtil.py` (`apply_xseg`, when face types differ).
+  - No other removed NumPy aliases (`np.int`, `np.float`, `np.bool`,
+    `np.object`, `np.str`, `np.long`, `np.complex`) remain in the tree.
 - **XSeg masks from normalized polygons.** `core/imagelib/SegIEPolys.py`
   `overlay_mask` scales `[0, 1]` polygon coordinates to pixels before
   rasterizing. Before this fix they truncated to `(0, 0)` and produced empty
