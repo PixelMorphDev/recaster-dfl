@@ -1,0 +1,66 @@
+# recaster-dfl CI skeleton (slice B0).
+#
+# - import-smoke: CPU import of every mainscripts.* module in a clean
+#   Python 3.10 env built from the linux env pins (TF CPU wheel, no GPU).
+# - source-artifact: builds the weights-free source tarball exactly as a
+#   release would (git archive + SOURCE.txt), and records its sha256.
+#
+# The tag-driven release pipeline (env bundles, weights artifact, publish,
+# lock PR) is a later slice. Actions are pinned by commit SHA.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  import-smoke:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+      - name: Install CPU runtime (mirrors envs/linux-x86_64-cuda12, TF CPU wheel)
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            "tensorflow-cpu==2.16.2" "numpy==1.26.4" "opencv-python==4.10.0.84" \
+            "PyQt5>=5.15,<5.16" scipy h5py numexpr scikit-image pillow colorama tqdm \
+            pyyaml jsonschema ffmpeg-python
+      - name: Install Qt runtime libraries
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1 libegl1 libxkbcommon0
+      - name: Import smoke
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python ci/import_smoke.py
+
+  source-artifact:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build source tarball
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          name="recaster-dfl-src-${sha:0:12}"
+          printf 'repo: %s\ncommit: %s\nupstream: MachineEditor/DeepFaceLab-MVE@6e366896e0119e26600c3fcebc914e6fc54fcfee\n' \
+            "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" "$sha" > SOURCE.txt
+          git archive --format=tar --prefix="${name}/" HEAD > "${name}.tar"
+          tar --append -f "${name}.tar" --transform "s,^,${name}/," SOURCE.txt
+          if tar -tf "${name}.tar" | grep -E '\.npy$'; then echo "weights leaked into source artifact" >&2; exit 1; fi
+          gzip -n -9 "${name}.tar"
+          sha256sum "${name}.tar.gz" | tee "${name}.tar.gz.sha256"
+          ls -l "${name}.tar.gz"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: recaster-dfl-src
+          path: recaster-dfl-src-*.tar.gz*
+          retention-days: 14
