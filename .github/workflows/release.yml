@@ -21,9 +21,11 @@
 #             lock last. Fails if the R2 secrets aren't set.
 #
 # Pull requests, workflow_dispatch and non-tag pushes are dry runs: the same
-# build, install and smoke, no secrets, no upload. The app-side lock PR is
-# opened by the owner with ci/release/open_lock_pr.sh (this repo's token
-# can't write to the private app repo).
+# build, install and smoke, no secrets, no upload. Build inputs don't depend on
+# the mode (no package cache in either), so every dry run rehearses the release
+# build; only the tag name, retention, lock comment and publish differ. The
+# app-side lock PR is opened by the owner with ci/release/open_lock_pr.sh (this
+# repo's token can't write to the private app repo).
 #
 # Actions are pinned by commit SHA.
 name: release
@@ -100,7 +102,8 @@ jobs:
   tools:
     # Release tooling tests (lock model, unpacked_size, weights determinism,
     # install emulation, R2 no-overwrite publish against a fake aws cli,
-    # lock PR checks, AGPL guard, env locks) and the vendored-app-file check.
+    # lock PR checks, AGPL guard, env locks, dry-run/release build parity) and the
+    # vendored-app-file check.
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
@@ -110,7 +113,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
-      - run: python -m pip install "pydantic==2.12.5"
+      - run: python -m pip install "pydantic==2.12.5" "PyYAML==6.0.3"
       - run: python ci/release/release_tools.py check-vendor
       - run: >-
           python -m unittest -v tests.test_release_tools tests.test_publish_r2 tests.test_lock_pr_checks
@@ -225,9 +228,10 @@ jobs:
           micromamba-version: "2.9.0-0"
           environment-file: envs/${{ matrix.platform }}/conda-lock.yml
           environment-name: recaster-dfl
-          # Release builds never restore a cache; dry runs cache conda packages only
-          cache-downloads: ${{ needs.meta.outputs.release != 'true' }}
-          cache-downloads-key: conda-pkgs-${{ matrix.platform }}-${{ hashFiles(format('envs/{0}/*', matrix.platform)) }}
+          # No cache in either mode, so a dry run is a rehearsal of the release
+          # build (rdfl-2026.10.0-rc1 failed on a release-only cache input).
+          # Literal false and no *-key inputs; tests/test_release_qa_guards.py checks.
+          cache-downloads: false
           cache-environment: false
           # No shell activation: later steps must never see the build env
           init-shell: none

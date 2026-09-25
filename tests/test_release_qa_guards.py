@@ -6,11 +6,18 @@
   owner gets the precise reason before a branch is created in the app checkout.
 - WorkflowGuardTests: the env build keeps installing from the committed locks
   (conda-lock.yml via micromamba; requirements.txt with --require-hashes --no-deps).
+- WorkflowModeParityTests: the env build's inputs are the same in dry-run and
+  release mode, so every PR dry run rehearses the release build. No cache is
+  enabled by an expression, and no cache key is passed unless its flag is a
+  literal true (rdfl-2026.10.0-rc1 failed because the release set
+  cache-downloads false but still passed cache-downloads-key).
 
-The parity tests need pydantic (the vendored app lock model); they run in
-release.yml's tools job and are skipped without it (ci.yml's bridge-tests).
+The parity tests need pydantic (the vendored app lock model) and the mode tests
+need PyYAML; both run in release.yml's tools job and are skipped without them
+(ci.yml's bridge-tests).
 """
 
+import json
 import re
 import sys
 import unittest
@@ -27,6 +34,12 @@ try:
     HAVE_PYDANTIC = True
 except ImportError:
     HAVE_PYDANTIC = False
+
+try:
+    import yaml
+    HAVE_YAML = True
+except ImportError:
+    HAVE_YAML = False
 
 REPO = "PixelMorphDev/recaster-dfl"
 TAG = "rdfl-2026.10.0-rc1"
@@ -99,6 +112,99 @@ class WorkflowGuardTests(unittest.TestCase):
         for flag in ("--require-hashes", "--no-deps", "--only-binary :all:",
                      '-r "envs/${PLATFORM}/requirements.txt"'):
             self.assertIn(flag, installs[0])
+
+
+# setup-micromamba's cache enable flags (each has a <flag>-key input)
+MICROMAMBA_CACHE_FLAGS = ("cache-downloads", "cache-environment")
+# Anything that differs between a tag push and a dry run
+MODE_EXPRESSIONS = ("outputs.release", "github.event_name", "github.ref", "github.head_ref")
+
+
+def _steps(workflow):
+    for job_id, job in (workflow.get("jobs") or {}).items():
+        for i, step in enumerate(job.get("steps") or []):
+            yield job_id, step.get("name") or step.get("uses") or f"step {i}", step
+
+
+def cache_input_problems(workflow):
+    """Cache inputs that could differ between dry-run and release mode, or that
+    the action refuses (a key with its flag not literally true)."""
+    problems = []
+    micromamba_steps = 0
+    for job_id, name, step in _steps(workflow):
+        uses = step.get("uses") or ""
+        inputs = step.get("with") or {}
+        where = f"{job_id} / {name}"
+        if uses.startswith("mamba-org/setup-micromamba@"):
+            micromamba_steps += 1
+            for flag in MICROMAMBA_CACHE_FLAGS:
+                if flag in inputs and not isinstance(inputs[flag], bool):
+                    problems.append(f"{where}: {flag} must be a literal true/false, not {inputs[flag]!r}")
+        # Any action: a cache key needs its flag literally true (setup-micromamba
+        # refuses a key with the flag false), and no cache input may be an
+        # expression, which could change with the mode
+        for input_name, value in inputs.items():
+            if "cache" not in input_name:
+                continue
+            if input_name.endswith("-key"):
+                flag = input_name[:-len("-key")]
+                if inputs.get(flag) is not True:
+                    problems.append(f"{where}: {input_name} is set but {flag} is {inputs.get(flag)!r}")
+            elif isinstance(value, str) and "${{" in value:
+                problems.append(f"{where}: {input_name} is an expression ({value!r})")
+    if not micromamba_steps:
+        problems.append("no setup-micromamba step found (the checker is looking at the wrong workflow)")
+    return sorted(set(problems))
+
+
+@unittest.skipUnless(HAVE_YAML, "PyYAML not installed (runs in release.yml tools job)")
+class WorkflowModeParityTests(unittest.TestCase):
+    def setUp(self):
+        self.workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_cache_inputs_are_consistent_in_both_modes(self):
+        self.assertEqual(cache_input_problems(self.workflow), [])
+
+    def test_the_rc1_step_is_refused(self):
+        # The step that failed rdfl-2026.10.0-rc1 (run 36125530274)
+        rc1 = {"jobs": {"env": {"steps": [{"name": "Build the env", "uses": "mamba-org/setup-micromamba@f457c30", "with": {
+            "cache-downloads": "${{ needs.meta.outputs.release != 'true' }}",
+            "cache-downloads-key": "conda-pkgs-${{ matrix.platform }}",
+            "cache-environment": False}}]}}}
+        problems = cache_input_problems(rc1)
+        self.assertTrue(any("cache-downloads must be a literal" in p for p in problems), problems)
+        self.assertTrue(any("cache-downloads-key is set" in p for p in problems), problems)
+        # An empty-string key (setup-micromamba reads '' as unset) is still refused: the flag isn't literal
+        rc1["jobs"]["env"]["steps"][0]["with"]["cache-downloads-key"] = "${{ needs.meta.outputs.release != 'true' && 'k' || '' }}"
+        self.assertTrue(cache_input_problems(rc1))
+
+    def test_a_key_needs_a_literal_true_flag(self):
+        for flags in ({}, {"cache-environment": False}):
+            with self.subTest(flags=flags):
+                wf = {"jobs": {"env": {"steps": [{"uses": "mamba-org/setup-micromamba@x",
+                                                  "with": dict(flags, **{"cache-environment-key": "k"})}]}}}
+                self.assertTrue(cache_input_problems(wf))
+        ok = {"jobs": {"env": {"steps": [{"uses": "mamba-org/setup-micromamba@x",
+                                          "with": {"cache-downloads": True, "cache-downloads-key": "k"}}]}}}
+        self.assertEqual(cache_input_problems(ok), [])
+
+    def test_env_build_does_not_depend_on_the_mode(self):
+        # Tag, commit and retention may differ (needs.meta.outputs.tag/commit/retention);
+        # nothing in the env job may branch on the release flag, the event or the ref.
+        env_job = self.workflow["jobs"]["env"]
+        self.assertNotIn("if", env_job)
+        text = json.dumps(env_job)
+        for expr in MODE_EXPRESSIONS:
+            self.assertNotIn(expr, text, f"the env job references {expr}, so a dry run doesn't rehearse the release build")
+        self.assertEqual(sorted(env_job["env"]), ["COMMIT", "PLATFORM", "TAG"])
+
+    def test_the_pack_env_is_created_from_its_lock_without_a_cache_action(self):
+        # The pack tool env comes from micromamba create in the conda-pack step, not a second setup-micromamba
+        uses = [step.get("uses", "") for _, _, step in _steps(self.workflow)]
+        self.assertEqual(sum(u.startswith("mamba-org/setup-micromamba@") for u in uses), 1)
+        pack = [step["run"] for _, name, step in _steps(self.workflow) if name == "conda-pack"]
+        self.assertEqual(len(pack), 1)
+        self.assertIn('create -y -r "$MAMBA_ROOT_PREFIX" -n pack -f ci/release/pack-env/conda-lock.yml', pack[0])
 
 
 if __name__ == "__main__":
