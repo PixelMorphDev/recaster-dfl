@@ -4,9 +4,25 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
 `6e366896e0119e26600c3fcebc914e6fc54fcfee`. Upstream's own history is in
 `CHANGELOG.md` and in git.
 
-## Unreleased (2026-09-25): recaster_bridge v1
+## Unreleased (2026-09-25): recaster_bridge v1, release pipeline
 
 ### Added
+
+- `.github/workflows/release.yml` and `ci/release/`: the runtime release
+  pipeline (Recaster RF-501 slice E2). On an `rdfl-*` tag it builds the
+  weights-free source tarball, the weights tar (from upstream `6e36689`,
+  checked against `WEIGHTS.sha256`) and conda-packed envs for
+  `linux-x86_64-cuda12` and `macos-arm64-metal`. It installs them into a
+  fresh prefix with Recaster's own safe-extract rules and `conda-unpack`,
+  runs the bridge probe, a CPU S3FD/2DFAN pass and the import smoke, writes
+  `dfl_runtime.lock.json` (validated with Recaster's lock model, vendored
+  in `ci/release/vendor/`), and, after owner approval in the `release`
+  environment, uploads everything to R2 without overwriting existing
+  objects. Pull requests and manual runs are dry runs with no secrets and
+  no upload. `ci/release/open_lock_pr.sh` opens the Recaster lock PR from a
+  published run.
+- `tests/test_release_tools.py`: release tooling tests (`unpacked_size`,
+  weights determinism, lock validation, install emulation, vendored files).
 
 - `recaster_bridge/` (protocol 1, bridge 1.0.0): a file-based JSON-lines
   side channel for running DFL out of process. Active only when

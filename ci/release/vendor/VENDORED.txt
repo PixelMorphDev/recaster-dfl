@@ -1,0 +1,9 @@
+# Files copied verbatim from the Recaster app (PixelMorphDev/recaster, private;
+# GPL-3.0-only, Copyright PixelMorph LLC) so the release CI validates artifacts
+# and the lock with the exact rules the app's runtime manager applies.
+# Do not edit them here. To refresh, run from this repo:
+#   ci/release/sync_vendor.sh <path-to-recaster-checkout>
+# tests/test_release_tools.py fails if a file's sha256 differs from this list.
+app_commit: 2648be56bc6cbe75c367b1eec4fd3f6ca52bd2e0
+afba7f4e6999028c9b09aab0aa980e4776c10f5a4248fe8473d361f71cdaf975  recaster_app/lock_model.py  dfl_desktop/dfl/lock_model.py
+c50a5eb38d9b5240aca1c7e2a40f820f4182066aa56f99143cfef5c1eca8bfa6  recaster_app/safe_extract.py  dfl_desktop/dfl/safe_extract.py
