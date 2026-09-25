@@ -8,7 +8,8 @@ processes) or without a usable run dir it returns a plain ``InteractDesktop``.
 Terminal output is unchanged: tqdm bars and log lines still go to stdout,
 which the caller tees to ``stdout.log``. Windows (``show_image``, manual
 extract, the XSeg editor) behave as upstream; the headless preview mapping
-arrives with the training slice.
+arrives with the training slice. ``log_info`` also remembers the menu a
+blank prompt belongs to (its context, see ``answers.py``).
 """
 
 import itertools
@@ -58,6 +59,7 @@ class _BridgeMixin:
         self._prompt_ids = itertools.count(1)
         self._pg_state: Optional[list] = None  # [desc, current, total]
         self._pg_last_emit = 0.0
+        self._menu: Optional[str] = None  # context for a blank prompt (answers.py)
 
     # -- progress -----------------------------------------------------------
 
@@ -113,6 +115,12 @@ class _BridgeMixin:
 
     # -- logging ------------------------------------------------------------
 
+    def log_info(self, msg, end='\n'):
+        super().log_info(msg, end=end)
+        line = next((part.strip() for part in str(msg).splitlines() if part.strip()), None)
+        if line is not None:
+            self._menu = line
+
     def log_err(self, msg, end='\n'):
         super().log_err(msg, end=end)
         text = str(msg).strip()
@@ -125,7 +133,9 @@ class _BridgeMixin:
                  **meta) -> Any:
         """Answer one prompt; always emits ``answered``. Never raises."""
         book = self._bridge.answers
-        answer = book.find(text)
+        context = self._menu if not str(text or "").strip() else None
+        self._menu = None  # a menu belongs to the prompt right after it
+        answer = book.find(text, context)
         source, key = "default", None
         value = default
         if answer is not None:
@@ -134,6 +144,8 @@ class _BridgeMixin:
         elif book.policy == POLICY_ASK:
             prompt_id = f"p{next(self._prompt_ids)}"
             fields = {"id": prompt_id, "kind": kind, "text": text, "default": default}
+            if context is not None:
+                fields["context"] = context
             fields.update({k: v for k, v in meta.items() if v is not None})
             self._bridge.writer.emit("prompt", **fields)
             got, raw = self._bridge.control.wait_answer(prompt_id, book.ask_timeout_s or None)
@@ -141,10 +153,12 @@ class _BridgeMixin:
                 source = "client"
                 value = self._convert(convert, raw, default)
         event = {"text": text, "value": value, "source": source}
+        if context is not None:
+            event["context"] = context
         if key is not None:
             event["key"] = key
         self._bridge.writer.emit("answered", **event)
-        print(f"{text.strip()} : {value}")
+        print(f"{text.strip() or context or ''} : {value}")
         return value
 
     @staticmethod

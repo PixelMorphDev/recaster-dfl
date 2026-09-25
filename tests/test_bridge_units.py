@@ -39,7 +39,7 @@ def _events(path):
 
 class VersionTests(unittest.TestCase):
     def test_version_file(self):
-        self.assertEqual(read_version(), {"protocol": 1, "bridge": "1.1.0"})
+        self.assertEqual(read_version(), {"protocol": 1, "bridge": "1.2.0"})
         self.assertEqual(PROTOCOL, 1)
 
     def test_run_dir_needs_flag_and_existing_dir(self):
@@ -167,6 +167,29 @@ class AnswerTests(unittest.TestCase):
     def test_ask_policy(self):
         book, _ = parse_answers({"v": 1, "policy": POLICY_ASK, "ask_timeout_s": 5, "answers": []})
         self.assertEqual((book.policy, book.ask_timeout_s), (POLICY_ASK, 5))
+
+    def test_blank_prompt_matches_context_answers_only(self):
+        answers = (Answer("mode_text", ("Choose mode",), 9),
+                   Answer("mask_mode", ("Choose mask mode:",), 6, context=True),
+                   Answer("mode", ("Choose mode:",), 3, context=True))
+        # A blank prompt: context answers, matched against the context, first hit wins
+        self.assertEqual(find_answer(answers, "", "Choose mask mode:").key, "mask_mode")
+        self.assertEqual(find_answer(answers, "  ", "CHOOSE MODE:").key, "mode")
+        self.assertIsNone(find_answer(answers, "", None))
+        self.assertIsNone(find_answer(answers, "", "[0] : demo - latest"))
+        # A prompt with text never matches a context answer (nor its context)
+        self.assertEqual(find_answer(answers, "Choose mode: ", "Choose mask mode:").key, "mode_text")
+        self.assertIsNone(find_answer(answers[1:], "Choose mask mode:"))
+
+    def test_context_key_is_parsed_strictly(self):
+        book, problems = parse_answers({"v": 1, "answers": [
+            {"key": "a", "match": ["Choose mode:"], "value": 1, "context": True},
+            {"key": "b", "match": ["Choose mode:"], "value": 2, "context": "yes"},
+            {"key": "c", "match": ["Choose mode:"], "value": 3},
+        ]})
+        self.assertEqual(problems, [])
+        self.assertEqual([a.context for a in book.answers], [True, False, False])
+        self.assertEqual(book.find("", "Choose mode:").key, "a")
 
 
 class ControlReaderTests(unittest.TestCase):

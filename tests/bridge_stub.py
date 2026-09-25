@@ -10,6 +10,11 @@ as JSON once all of them are up.
 Scenario ``semlock`` holds a ``multiprocessing.Lock`` (a named POSIX
 semaphore owned by the resource tracker) shared with one worker; the
 semaphore's name and the tracker's pid go to ``STUB_SEM_INFO`` as JSON.
+
+Scenario ``merge_settings`` runs the real ``MergerConfigMasked.ask_settings``
+(``merger/MergerConfig.py``, loaded on its own with a stand-in ``facelib``, so
+no TensorFlow) and writes the resulting ``get_config()`` to
+``STUB_MERGE_CONFIG`` as JSON.
 """
 import json
 import multiprocessing
@@ -81,6 +86,21 @@ def start_semlock(report):
     return lock
 
 
+def merge_settings(report):
+    import importlib.util
+    import types
+    facelib = types.ModuleType("facelib")  # the real one imports TensorFlow
+    facelib.FaceType = types.SimpleNamespace(HALF=0, MID_FULL=1, FULL=2, WHOLE_FACE=3, HEAD=4, CUSTOM=5)
+    sys.modules["facelib"] = facelib
+    spec = importlib.util.spec_from_file_location("merger_config", ROOT / "merger" / "MergerConfig.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    cfg = module.MergerConfigMasked(face_type=facelib.FaceType.WHOLE_FACE)
+    cfg.ask_settings()
+    _write_json(report, {k: (v.item() if hasattr(v, "item") else v) for k, v in cfg.get_config().items()
+                         if k != "sharpen_dict"})
+
+
 def start_tree(report):
     report = Path(report)
     workers = []
@@ -148,6 +168,9 @@ if __name__ == "__main__":
         for _ in range(2400):
             time.sleep(0.05)
             io.progress_bar_inc(1)
+        exit(0)
+    elif scenario == "merge_settings":
+        merge_settings(os.environ["STUB_MERGE_CONFIG"])
         exit(0)
     elif scenario == "crash":
         io.progress_bar("Extracting", 2)
