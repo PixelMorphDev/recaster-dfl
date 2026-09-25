@@ -273,7 +273,8 @@ def install_check(lock_path: Path, platform: str, artifacts_dir: Path, root: Pat
     from recaster_app.lock_model import load_lock
     lock = load_lock(lock_path)
     env = lock.env_for(platform)
-    if env is None or not lock.is_published_for(platform):
+    # Complete, not published: the CI installs dry-run locks too
+    if env is None or not lock.is_complete_for(platform):
         raise ReleaseError(f"the lock has no complete runtime for {platform}")
     source, weights = lock.artifacts.source, lock.artifacts.weights
     for artifact in (env, weights, source):
@@ -380,7 +381,12 @@ def measure_provenance(path: Path) -> dict:
 def make_lock(*, tag: str, commit: str, repo: str, repo_root: Path, source: dict, weights: dict,
               envs: Iterable[dict], base_url: str = DEFAULT_BASE_URL,
               comment: Optional[str] = None) -> tuple:
-    """(lock dict, publish manifest). Validated with the app's RuntimeLock; raises on any problem."""
+    """(lock dict, publish manifest). Validated with the app's RuntimeLock; raises on any problem.
+
+    A lock with a release tag (only tag pushes get one; dry runs are rdfl-dryrun-*)
+    must also be one the app treats as published: ``release_problem()`` is None
+    (no dry-run comment, every URL under a release prefix).
+    """
     from recaster_app.lock_model import PLATFORMS, RuntimeLock
 
     base_url = base_url.rstrip("/")
@@ -429,8 +435,15 @@ def make_lock(*, tag: str, commit: str, repo: str, repo_root: Path, source: dict
     }
     parsed = RuntimeLock.model_validate_json(json.dumps(lock))
     for platform in env_entries:
-        if not parsed.is_published_for(platform):
+        if not parsed.is_complete_for(platform):
             raise ReleaseError(f"the lock is not complete for {platform}")
+    if RELEASE_TAG_RE.fullmatch(tag):
+        problem = parsed.release_problem()
+        if problem is not None:
+            raise ReleaseError(f"the release lock would not be published by the app: {problem}")
+        unpublished = [p for p in env_entries if not parsed.is_published_for(p)]
+        if unpublished:
+            raise ReleaseError(f"the release lock is not published for {', '.join(unpublished)}")
     keys = [m["key"] for m in manifest]
     if len(keys) != len(set(keys)):
         raise ReleaseError("two artifacts map to the same R2 key")

@@ -19,6 +19,12 @@ Shape (schema 1)::
 ``placeholder: true`` marks a dev lock with nothing published yet (``source``
 and ``weights`` may then be null and ``envs`` empty); the runtime manager
 reports "no runtime published" instead of offering a download.
+A non-placeholder lock is only published if ``release_problem()`` is None:
+a release tag (``rdfl-YYYY.M.N[-rcN]``), no "dry run" comment (any case,
+``dry run``/``dry-run``/``dry_run``/``dryrun``), and every URL
+under the release prefixes (``RELEASE_URL_PREFIXES``). A lock that fails
+still loads (the release CI builds dry-run locks with this model), but it
+publishes nothing.
 ``signature``/``signing_key_id`` are reserved for RF-411 (a remotely fetched
 lock); they must stay null until that lands.
 
@@ -47,12 +53,27 @@ RUNTIME_ALLOWED_HOSTS = frozenset({
     "release-assets.githubusercontent.com",
 })
 
+# Where a release's artifacts may live ({tag} is the lock's tag). Every mirror
+# is another entry in an artifact's ``urls``, so it must be under one of these.
+R2_HOST = "runtimes.recaster.studio"
+GITHUB_HOST = "github.com"
+GITHUB_RELEASES_PATH = "/PixelMorphDev/recaster-dfl/releases/download"
+RELEASE_URL_PREFIXES = (
+    f"https://{R2_HOST}/dfl/{{tag}}/",
+    f"https://{R2_HOST}/dfl/weights/",   # weights only: content-addressed, shared by tags
+    f"https://{GITHUB_HOST}{GITHUB_RELEASES_PATH}/{{tag}}/",
+)
+
 ARCHIVE_FORMATS = ("tar.gz", "tar", "zip")
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 _SAFE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _SAFE_FILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
+# A published lock's tag; the release CI's dry runs are tagged rdfl-dryrun-*
+_RELEASE_TAG_RE = re.compile(r"rdfl-\d{4}\.\d{1,2}\.\d+(-rc\d+)?", re.ASCII)
+_DRY_RUN_RE = re.compile(r"dry[\s_-]*run", re.IGNORECASE)
+_PRINTABLE_ASCII_RE = re.compile(r"[!-~]+")
 
 
 def is_allowed_runtime_url(url) -> bool:
@@ -73,6 +94,34 @@ def is_allowed_runtime_url(url) -> bool:
     if parts.username or parts.password:
         return False
     return port in (None, 443)
+
+
+def is_release_artifact_url(url, tag: str, weights: bool = False) -> bool:
+    """True if ``url`` is under one of ``RELEASE_URL_PREFIXES`` for ``tag``.
+
+    Stricter than ``is_allowed_runtime_url`` (which also admits GitHub's
+    redirect targets): the host is matched exactly (no userinfo, no port,
+    not even :443), there's no query or fragment (not even a bare ``?``/``#``),
+    and the path is the prefix plus one plain file name (no ``.``/``..``,
+    ``%`` or ``\\``). Only printable ASCII is allowed: ``urlsplit`` strips
+    tab/CR/LF that ``http.client`` would reject, so they'd parse differently.
+    ``weights`` admits the shared ``/dfl/weights/`` R2 prefix.
+    """
+    if not isinstance(url, str) or not _PRINTABLE_ASCII_RE.fullmatch(url) or "?" in url or "#" in url:
+        return False
+    if not is_allowed_runtime_url(url):
+        return False
+    parts = urlsplit(url)
+    if "%" in parts.path or "\\" in parts.path:
+        return False
+    head, _, name = parts.path.rpartition("/")
+    if not _SAFE_FILE_RE.fullmatch(name) or ".." in name:
+        return False
+    if parts.netloc == R2_HOST:
+        return head == f"/dfl/{tag}" or (weights and head == "/dfl/weights")
+    if parts.netloc == GITHUB_HOST:
+        return head == f"{GITHUB_RELEASES_PATH}/{tag}"
+    return False
 
 
 def _safe_name(value: str, what: str) -> str:
@@ -210,9 +259,29 @@ class RuntimeLock(BaseModel):
             return None
         return self.artifacts.envs.get(platform)
 
-    def is_published_for(self, platform: Optional[str]) -> bool:
+    def release_problem(self) -> Optional[str]:
+        """Why this lock isn't a published release, or None if it is (see module doc)."""
+        if self.placeholder:
+            return "placeholder lock"
+        if not _RELEASE_TAG_RE.fullmatch(self.tag):
+            return f"tag {self.tag!r} is not a release tag (rdfl-YYYY.M.N[-rcN])"
+        if _DRY_RUN_RE.search(self.comment or ""):
+            return "dry-run lock"
+        artifacts = [("source", self.artifacts.source), ("weights", self.artifacts.weights),
+                     *self.artifacts.envs.items()]
+        for role, artifact in artifacts:
+            for url in artifact.urls if artifact is not None else ():
+                if not is_release_artifact_url(url, self.tag, weights=role == "weights"):
+                    return f"{role} URL is not under a release prefix for {self.tag}: {url}"
+        return None
+
+    def is_complete_for(self, platform: Optional[str]) -> bool:
+        """Every artifact for ``platform`` is present (a dry-run lock can be complete)."""
         return (not self.placeholder and self.artifacts.source is not None
                 and self.artifacts.weights is not None and self.env_for(platform) is not None)
+
+    def is_published_for(self, platform: Optional[str]) -> bool:
+        return self.is_complete_for(platform) and self.release_problem() is None
 
 
 def bundled_lock_path() -> Path:
