@@ -6,30 +6,40 @@
 #   ci/release/open_lock_pr.sh <run-id> <path-to-recaster-checkout>
 #
 # Runs on the owner's machine with `gh` logged in (the fork's CI has no token
-# for the private app repo). Downloads the `dfl-runtime-lock-published`
-# artifact, which only the release run's publish job uploads after every
-# object is on R2, validates it with the checkout's own lock model, checks
-# that each URL answers with the expected size, then branches from
-# origin/main, runs the bundled-lock test and opens the PR.
+# for the private app repo), from a recaster-dfl checkout. It trusts nothing
+# about the run it is given until lock_pr_checks.py has confirmed that:
+# - the run is a successful tag push of .github/workflows/release.yml in
+#   PixelMorphDev/recaster-dfl, for an rdfl-YYYY.M.P[-rcN] tag
+# - its `dfl-runtime-lock-published` artifact (uploaded only by the publish
+#   job, after every object is on R2) is for that tag and commit, is not a
+#   dry run, and points only at runtimes.recaster.studio/dfl/<tag>/ and
+#   /dfl/weights/
+# - the public dfl/<tag>/dfl_runtime.lock.json is byte-identical to it
+# Then it validates the lock with the checkout's own lock model, checks that
+# each URL answers with the expected size, branches from origin/main, runs
+# the bundled-lock test and opens the PR.
 set -euo pipefail
 
 run_id="$1"
 app="$(cd "$2" && pwd)"
+here="$(cd "$(dirname "$0")" && pwd)"
 fork_repo="PixelMorphDev/recaster-dfl"
+case "$run_id" in ''|*[!0-9]*) echo "error: run id must be numeric" >&2; exit 1;; esac
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-gh run download "$run_id" -R "$fork_repo" -n dfl-runtime-lock-published -D "$work"
-lock="$work/dfl_runtime.lock.json"
-tag="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tag"])' "$lock")"
-case "$tag" in rdfl-dryrun-*) echo "error: $tag is a dry-run lock" >&2; exit 1;; esac
+gh api "repos/${fork_repo}/actions/runs/${run_id}" > "$work/run.json"
+gh run download "$run_id" -R "$fork_repo" -n dfl-runtime-lock-published -D "$work/artifact"
+lock="$work/artifact/dfl_runtime.lock.json"
+tag="$(python3 "$here/lock_pr_checks.py" --repo "$fork_repo" --run "$work/run.json" --lock "$lock")"
 
 cd "$app"
 python3 - "$lock" <<'PY'
 import json, sys, urllib.request
 from dfl_desktop.dfl.lock_model import load_lock
 lock = load_lock(sys.argv[1])
-assert not lock.placeholder
+if lock.placeholder:
+    sys.exit("the lock is a placeholder")
 items = [lock.artifacts.source, lock.artifacts.weights, *lock.artifacts.envs.values()]
 for a in items:
     for url in a.urls:

@@ -1,8 +1,11 @@
-# recaster-dfl runtime environment: linux-x86_64-cuda12
+# recaster-dfl runtime environment: linux-x86_64-cuda12, conda side
 #
-# Single source of truth for this platform's DFL/TensorFlow env. The
-# exact, hash-pinned resolution lives next to this file in conda-lock.yml
-# (generated from this spec; not committed yet, see CHANGES.md).
+# Single source of truth for this platform's DFL/TensorFlow env, in two
+# parts that are built together (release.yml):
+#   environment.yml -> conda-lock.yml     conda packages (exact builds, sha256)
+#   requirements.in -> requirements.txt   PyPI packages (exact versions, hashes),
+#                                         installed with pip --require-hashes --no-deps
+# Regenerate both locks with envs/lock.sh after editing either spec.
 # Upstream's root environment.yml and requirements-*.txt are kept only as
 # upstream history and are NOT used by Recaster.
 #
@@ -26,11 +29,4 @@ dependencies:
   - tqdm
   - pyyaml             # models/ModelBase.py (module-level import)
   - jsonschema         # models/ModelBase.py (module-level import)
-  - pip
-  - pip:
-      - tensorflow[and-cuda]==2.16.2   # pulls nvidia-cudnn-cu12 8.9.x
-      - opencv-python==4.10.0.84       # non-headless (highgui for DFL windows)
-      - ffmpeg-python                  # mainscripts/VideoEd.py
-      - tf2onnx                        # DFM export (lazy import). Resolves to 1.17.0 (onnx 1.19.0,
-                                       # protobuf 4.25.x) with TF 2.16.2 + numpy 1.26.4 (PyPI, py3.10)
-      - tensorboardX                   # optional training logs (lazy import)
+  - pip                # installs requirements.txt

@@ -197,6 +197,29 @@ class LockTests(unittest.TestCase):
         with self.assertRaises(Exception):
             self._lock(base_url="https://example.com")
 
+    def test_provenance_files_go_in_the_manifest_not_the_lock(self):
+        meta = self._env_meta()
+        meta["provenance"] = [{"name": "rdfl-env-macos-arm64-metal-0123456789ab.explicit.txt",
+                               "sha256": "1" * 64, "size": 10},
+                              {"name": "rdfl-env-macos-arm64-metal-0123456789ab.pip-freeze.txt",
+                               "sha256": "2" * 64, "size": 20}]
+        lock, manifest = self._lock(envs=[meta])
+        prov = [m for m in manifest if m["role"] == "provenance"]
+        self.assertEqual([m["key"] for m in prov],
+                         ["dfl/rdfl-dryrun-abc/rdfl-env-macos-arm64-metal-0123456789ab.explicit.txt",
+                          "dfl/rdfl-dryrun-abc/rdfl-env-macos-arm64-metal-0123456789ab.pip-freeze.txt"])
+        self.assertEqual({m["content_type"] for m in prov}, {"text/plain; charset=utf-8"})
+        self.assertNotIn("provenance", json.dumps(lock))
+
+    def test_measure_records_provenance(self):
+        (self.tmp / "p.txt").write_text("hello\n")
+        out = self.tmp / "m.json"
+        self.assertEqual(rt.main(["measure", str(self.env), "--provenance", str(self.tmp / "p.txt"),
+                                  "--out", str(out)]), 0)
+        meta = json.loads(out.read_text())
+        self.assertEqual(meta["provenance"], [{"name": "p.txt", "sha256": rt.sha256_file(self.tmp / "p.txt"),
+                                               "size": 6}])
+
     def test_duplicate_platform_rejected(self):
         with self.assertRaises(rt.ReleaseError):
             self._lock(envs=[self._env_meta(), self._env_meta()])
@@ -242,10 +265,103 @@ class VendorTests(unittest.TestCase):
     def test_vendored_app_files_unchanged(self):
         self.assertEqual(rt.check_vendor(), [])
 
-    def test_env_id_uses_the_env_spec(self):
+    def test_env_id_uses_the_locks_else_the_spec(self):
         env_id = rt.env_id(ROOT, "linux-x86_64-cuda12")
         self.assertRegex(env_id, r"^linux-x86_64-cuda12-[0-9a-f]{12}$")
-        self.assertEqual(rt.env_spec(ROOT, "linux-x86_64-cuda12").name, "environment.yml")
+        tmp = Path(tempfile.mkdtemp())
+        env_dir = tmp / "envs" / "windows-x86_64-cuda11"
+        env_dir.mkdir(parents=True)
+        (env_dir / "environment.yml").write_text("name: x\n")
+        self.assertEqual([f.name for f in rt.env_spec_files(tmp, "windows-x86_64-cuda11")], ["environment.yml"])
+        self.assertEqual(rt.env_id(tmp, "windows-x86_64-cuda11"),
+                         f"windows-x86_64-cuda11-{rt.sha256_file(env_dir / 'environment.yml')[:12]}")
+        (env_dir / "conda-lock.yml").write_text("version: 1\n")
+        conda_only = rt.env_id(tmp, "windows-x86_64-cuda11")
+        self.assertEqual(conda_only, f"windows-x86_64-cuda11-{rt.sha256_file(env_dir / 'conda-lock.yml')[:12]}")
+        (env_dir / "requirements.txt").write_text("a==1 --hash=sha256:" + "0" * 64 + "\n")
+        with_pip = rt.env_id(tmp, "windows-x86_64-cuda11")
+        self.assertNotEqual(with_pip, conda_only)
+        (env_dir / "requirements.txt").write_text("a==2 --hash=sha256:" + "0" * 64 + "\n")
+        self.assertNotEqual(rt.env_id(tmp, "windows-x86_64-cuda11"), with_pip)
+
+
+class ConstantTests(unittest.TestCase):
+    """VENDORED.txt's const lines: release_tools' mirrors of app constants."""
+
+    APP_FILES = {
+        "dfl_desktop/dfl/runtime_manager.py": (
+            "import os\nX = os.environ.get('A')\nEXTRACT_SIZE_FACTOR = 1.1  # c\n"
+            "EXTRACT_SIZE_SLACK = 1 << 20\nCONDA_UNPACK_TIMEOUT_S: int = 900\n"),
+        "dfl_desktop/dfl/locator.py": (
+            "from pathlib import Path\n_REQUIRED_SOURCE_DIRS = ('mainscripts', 'core', 'models', 'facelib', 'DFLIMG')\n"
+            "_WEIGHTS_FILE = Path('facelib') / 'S3FD.npy'\n_MIN_WEIGHTS_BYTES = 1024\n"),
+        "dfl_desktop/dfl/runner.py": (
+            "_BRIDGE_ENV_KEYS = ('RECASTER_BRIDGE', 'RECASTER_RUN_DIR', 'RECASTER_RUN_ID', 'RECASTER_PROTOCOL',\n"
+            "                    'RECASTER_HEARTBEAT_S', 'RECASTER_BRIDGE_OWNER_PID')\n"
+            "_DROP_ENV_KEYS = ('PYTHONPATH', 'PYTHONHOME', 'PYTHONSTARTUP', 'PYTHONEXECUTABLE') + _BRIDGE_ENV_KEYS\n"
+            "_DROP_ENV_PREFIXES = ('QT_', 'QTWEBENGINE_', 'NN_')\n"),
+    }
+
+    def _app(self):
+        app = Path(tempfile.mkdtemp())
+        for rel, text in self.APP_FILES.items():
+            (app / rel).parent.mkdir(parents=True, exist_ok=True)
+            (app / rel).write_text(text)
+        for line in (rt.VENDOR_DIR / "VENDORED.txt").read_text().splitlines():
+            if line[:1].isalnum() and not line.startswith(("app_commit:", rt.CONST_PREFIX)):
+                _digest, rel, app_rel = line.split()[:3]
+                (app / app_rel).parent.mkdir(parents=True, exist_ok=True)
+                (app / app_rel).write_bytes((rt.VENDOR_DIR / rel).read_bytes())
+        return app
+
+    def test_every_mirrored_constant_is_recorded(self):
+        recorded = {rt.parse_const_line(l)[0] for l in (rt.VENDOR_DIR / "VENDORED.txt").read_text().splitlines()
+                    if l.startswith(rt.CONST_PREFIX)}
+        self.assertEqual(recorded, {"EXTRACT_SIZE_FACTOR", "EXTRACT_SIZE_SLACK", "CONDA_UNPACK_TIMEOUT_S",
+                                    "REQUIRED_SOURCE_DIRS", "WEIGHTS_FILE", "MIN_WEIGHTS_BYTES",
+                                    "DROP_ENV_KEYS", "DROP_ENV_PREFIXES"})
+
+    def test_app_constant_evaluates_without_importing(self):
+        app = self._app()
+        self.assertEqual(rt.app_constant(app / "dfl_desktop/dfl/runtime_manager.py", "EXTRACT_SIZE_SLACK"), 1 << 20)
+        self.assertEqual(rt.app_constant(app / "dfl_desktop/dfl/runtime_manager.py", "CONDA_UNPACK_TIMEOUT_S"), 900)
+        self.assertEqual(rt.const_json(rt.app_constant(app / "dfl_desktop/dfl/locator.py", "_WEIGHTS_FILE")),
+                         "facelib/S3FD.npy")
+        self.assertEqual(len(rt.app_constant(app / "dfl_desktop/dfl/runner.py", "_DROP_ENV_KEYS")), 10)
+        with self.assertRaises(rt.ReleaseError):
+            rt.app_constant(app / "dfl_desktop/dfl/runtime_manager.py", "X")      # not a constant
+
+    def test_check_vendor_against_a_matching_app(self):
+        self.assertEqual(rt.check_vendor(self._app()), [])
+        self.assertEqual(rt.vendor_const_lines(self._app()),
+                         [l for l in (rt.VENDOR_DIR / "VENDORED.txt").read_text().splitlines()
+                          if l.startswith(rt.CONST_PREFIX)])
+
+    def test_check_vendor_reports_a_changed_app_constant(self):
+        app = self._app()
+        path = app / "dfl_desktop/dfl/runtime_manager.py"
+        path.write_text(path.read_text().replace("= 900", "= 1200"))
+        problems = rt.check_vendor(app)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("CONDA_UNPACK_TIMEOUT_S", problems[0])
+
+    def test_check_vendor_reports_a_changed_app_file(self):
+        app = self._app()
+        with open(app / "dfl_desktop/dfl/lock_model.py", "a") as f:
+            f.write("# changed\n")
+        problems = rt.check_vendor(app)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("lock_model.py", problems[0])
+
+    def test_check_vendor_reports_a_drifted_mirror(self):
+        original = rt.CONDA_UNPACK_TIMEOUT_S
+        rt.CONDA_UNPACK_TIMEOUT_S = 60
+        try:
+            problems = rt.check_vendor()
+        finally:
+            rt.CONDA_UNPACK_TIMEOUT_S = original
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("release_tools.py has 60", problems[0])
 
 
 if __name__ == "__main__":

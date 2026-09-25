@@ -7,15 +7,17 @@
 # - source:   weights-free git archive of HEAD + SOURCE.txt (tar.gz)
 # - weights:  facelib/*.npy from upstream 6e36689, checked against
 #             WEIGHTS.sha256 (deterministic tar, content-addressed name)
-# - env:      conda-pack of envs/<platform> (linux-x86_64-cuda12 on
-#             ubuntu-22.04, macos-arm64-metal on macos-14), installed into a
+# - env:      envs/<platform>/conda-lock.yml (micromamba) + requirements.txt
+#             (pip --require-hashes --no-deps), conda-packed (linux-x86_64-cuda12
+#             on ubuntu-22.04, macos-arm64-metal on macos-14), installed into a
 #             different prefix with the app's safe-extract rules +
-#             conda-unpack, then probe + a CPU S3FD/2DFAN pass + import smoke
+#             conda-unpack, then probe + a CPU S3FD/2DFAN pass + import smoke.
+#             explicit.txt and pip-freeze.txt are published next to it.
 # - lock:     validated against the app's lock model (ci/release/vendor)
 # - publish:  tag pushes only, in the protected `release` environment (owner
 #             approval, rdfl-* tags only). Uploads to R2 `recaster-runtimes`
-#             under dfl/<tag>/ (weights: dfl/weights/), never overwriting.
-#             Skipped with a warning while the R2 secrets aren't set.
+#             under dfl/<tag>/ (weights: dfl/weights/), never overwriting,
+#             lock last. Fails if the R2 secrets aren't set.
 #
 # Pull requests, workflow_dispatch and non-tag pushes are dry runs: the same
 # build, install and smoke, no secrets, no upload. The app-side lock PR is
@@ -36,6 +38,9 @@ on:
       - "WEIGHTS.sha256"
       - "tests/test_release_tools.py"
       - "tests/test_publish_r2.py"
+      - "tests/test_lock_pr_checks.py"
+      - "tests/test_env_info.py"
+      - "tests/test_env_locks.py"
       - ".github/workflows/release.yml"
   workflow_dispatch:
 
@@ -92,8 +97,8 @@ jobs:
 
   tools:
     # Release tooling tests (lock model, unpacked_size, weights determinism,
-    # install emulation, R2 no-overwrite publish against a fake aws cli)
-    # and the vendored-app-file check.
+    # install emulation, R2 no-overwrite publish against a fake aws cli,
+    # lock PR checks, AGPL guard, env locks) and the vendored-app-file check.
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
@@ -105,7 +110,9 @@ jobs:
           python-version: "3.11"
       - run: python -m pip install "pydantic==2.12.5"
       - run: python ci/release/release_tools.py check-vendor
-      - run: python -m unittest tests.test_release_tools tests.test_publish_r2 -v
+      - run: >-
+          python -m unittest -v tests.test_release_tools tests.test_publish_r2 tests.test_lock_pr_checks
+          tests.test_env_info tests.test_env_locks
 
   source:
     needs: meta
@@ -210,11 +217,11 @@ jobs:
         run: |
           "${{ steps.tools-python.outputs.python-path }}" -m pip install "pydantic==2.12.5"
           echo "TOOLS_PY=${{ steps.tools-python.outputs.python-path }}" >> "$GITHUB_ENV"
-      - name: Build the env
+      - name: Build the env (conda side, from conda-lock.yml)
         uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
         with:
           micromamba-version: "2.9.0-0"
-          environment-file: envs/${{ matrix.platform }}/environment.yml
+          environment-file: envs/${{ matrix.platform }}/conda-lock.yml
           environment-name: recaster-dfl
           # Release builds never restore a cache; dry runs cache conda packages only
           cache-downloads: ${{ needs.meta.outputs.release != 'true' }}
@@ -223,28 +230,38 @@ jobs:
           # No shell activation: later steps must never see the build env
           init-shell: none
           post-cleanup: none
-      - name: Record the env
+      - name: Build the env (PyPI side, hash-pinned, no resolver)
         run: |
           set -euo pipefail
           prefix="$MAMBA_ROOT_PREFIX/envs/recaster-dfl"
           echo "BUILD_PREFIX=$prefix" >> "$GITHUB_ENV"
-          mkdir -p meta dist
-          "$MAMBA_EXE" env export -r "$MAMBA_ROOT_PREFIX" -n recaster-dfl --explicit > "dist/rdfl-env-${PLATFORM}.explicit.txt"
-          "$prefix/bin/python" -m pip list --format=freeze > "dist/rdfl-env-${PLATFORM}.pip-freeze.txt"
-          "$prefix/bin/python" ci/release/env_info.py "$PLATFORM" > meta/env-info.json
-          cat meta/env-info.json
-      - name: conda-pack
+          env -u PYTHONPATH PYTHONNOUSERSITE=1 "$prefix/bin/python" -m pip install --no-input \
+            --require-hashes --no-deps --only-binary :all: -r "envs/${PLATFORM}/requirements.txt"
+          env -u PYTHONPATH PYTHONNOUSERSITE=1 "$prefix/bin/python" -m pip check
+      - name: Record the env
         run: |
           set -euo pipefail
           env_id="$("$TOOLS_PY" ci/release/release_tools.py env-id --platform "$PLATFORM")"
           echo "ENV_ID=$env_id" >> "$GITHUB_ENV"
+          mkdir -p meta dist
+          # Provenance, published next to the env
+          "$MAMBA_EXE" env export -r "$MAMBA_ROOT_PREFIX" -n recaster-dfl --explicit > "dist/rdfl-env-${env_id}.explicit.txt"
+          "$BUILD_PREFIX/bin/python" -m pip list --format=freeze > "dist/rdfl-env-${env_id}.pip-freeze.txt"
+          # Pins, min OS/driver; fails on a forbidden or AGPL-licensed package
+          "$BUILD_PREFIX/bin/python" ci/release/env_info.py "$PLATFORM" > meta/env-info.json
+          cat meta/env-info.json
+      - name: conda-pack
+        run: |
+          set -euo pipefail
+          env_id="$ENV_ID"
           "$MAMBA_EXE" create -y -r "$MAMBA_ROOT_PREFIX" -n pack -c conda-forge "python=3.11" "conda-pack=0.9.2"
           archive="dist/rdfl-env-${env_id}.tar.gz"
           "$MAMBA_EXE" run -r "$MAMBA_ROOT_PREFIX" -n pack conda-pack -p "$BUILD_PREFIX" -o "$archive" --n-threads -1
           # The smoke must use the packed env only
           rm -rf "$BUILD_PREFIX"
           extra="$("$TOOLS_PY" -c 'import json,sys; d=json.load(open("meta/env-info.json")); d.update(platform=sys.argv[1], env_id=sys.argv[2]); print(json.dumps(d))' "$PLATFORM" "$env_id")"
-          "$TOOLS_PY" ci/release/release_tools.py measure "$archive" --extra "$extra" --out "meta/env-${PLATFORM}.json"
+          "$TOOLS_PY" ci/release/release_tools.py measure "$archive" --extra "$extra" --out "meta/env-${PLATFORM}.json" \
+            --provenance "dist/rdfl-env-${env_id}.explicit.txt" --provenance "dist/rdfl-env-${env_id}.pip-freeze.txt"
           df -h .
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -349,37 +366,29 @@ jobs:
       group: r2-publish
       cancel-in-progress: false
     steps:
-      - name: Check the R2 credentials
-        id: creds
+      - name: Require the R2 credentials
         env:
           HAS_ACCOUNT: ${{ secrets.R2_ACCOUNT_ID != '' }}
           HAS_KEY: ${{ secrets.R2_ACCESS_KEY_ID != '' }}
           HAS_SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY != '' }}
         run: |
-          if [ "$HAS_ACCOUNT" = true ] && [ "$HAS_KEY" = true ] && [ "$HAS_SECRET" = true ]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::R2 secrets are not set in the release environment; nothing was uploaded."
-            echo "R2 secrets are not set in the \`release\` environment: upload skipped." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$HAS_ACCOUNT" != true ] || [ "$HAS_KEY" != true ] || [ "$HAS_SECRET" != true ]; then
+            echo "::error::R2 secrets (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY) are not all set in the release environment; nothing was uploaded."
+            exit 1
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: steps.creds.outputs.configured == 'true'
         with:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        if: steps.creds.outputs.configured == 'true'
         with:
           pattern: rdfl-{source,weights,env-*}
           path: dist
           merge-multiple: true
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        if: steps.creds.outputs.configured == 'true'
         with:
           name: dfl-runtime-lock
           path: out
-      - name: Upload to R2 (no overwrites)
-        if: steps.creds.outputs.configured == 'true'
+      - name: Upload to R2 (no overwrites, lock last)
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -387,31 +396,45 @@ jobs:
           R2_BUCKET: recaster-runtimes
         run: python3 ci/release/publish_r2.py --manifest out/publish-manifest.json --dist dist --lock out/dfl_runtime.lock.json
       - name: Check the public URLs
-        if: steps.creds.outputs.configured == 'true'
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, urllib.request
-          lock = json.load(open("out/dfl_runtime.lock.json"))
-          arts = [lock["artifacts"]["source"], lock["artifacts"]["weights"], *lock["artifacts"]["envs"].values()]
+          import json, os, urllib.request
+          base = os.environ["PUBLIC_BASE_URL"]
+          manifest = json.load(open("out/publish-manifest.json"))
+          lock_bytes = open("out/dfl_runtime.lock.json", "rb").read()
+          headers = {"User-Agent": "recaster-dfl-ci"}
           bad = 0
-          for a in arts:
-              for url in a["urls"]:
-                  try:
-                      req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "recaster-dfl-ci"})
-                      with urllib.request.urlopen(req, timeout=30) as r:
-                          size = int(r.headers.get("Content-Length", -1))
-                  except Exception as e:
-                      size, err = -1, e
-                  if size != a["size"]:
-                      bad += 1
-                      print(f"::error::{url}: Content-Length {size}, expected {a['size']}")
-                  else:
-                      print(f"ok {url}")
+          # Every manifest object (the lock's artifact URLs are these keys, plus provenance)
+          for entry in manifest:
+              url = f"{base}/{entry['key']}"
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(url, method="HEAD", headers=headers), timeout=30) as r:
+                      size = int(r.headers.get("Content-Length", -1))
+              except Exception as e:
+                  size = -1
+                  print(f"::error::{url}: {e}")
+              if size != entry["size"]:
+                  bad += 1
+                  print(f"::error::{url}: Content-Length {size}, expected {entry['size']}")
+              else:
+                  print(f"ok {url}")
+          # The public lock, byte-identical (open_lock_pr.sh checks this again)
+          url = f"{base}/dfl/{json.loads(lock_bytes)['tag']}/dfl_runtime.lock.json"
+          try:
+              with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as r:
+                  public = r.read()
+          except Exception as e:
+              public = None
+              print(f"::error::{url}: {e}")
+          if public != lock_bytes:
+              bad += 1
+              print(f"::error::{url} is not byte-identical to the lock artifact")
+          else:
+              print(f"ok {url} (identical)")
           raise SystemExit(1 if bad else 0)
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: steps.creds.outputs.configured == 'true'
         with:
           name: dfl-runtime-lock-published
           path: out/dfl_runtime.lock.json

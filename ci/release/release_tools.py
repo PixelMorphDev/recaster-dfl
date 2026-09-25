@@ -8,8 +8,11 @@ Subcommands (run with the CI's tool Python, not the packed env)::
     install-check  install the artifacts the way Recaster's runtime manager does
     make-lock      dfl_runtime.lock.json + the R2 publish manifest, validated
                    against the app's lock model (vendor/recaster_app)
-    env-id         the env's id: <platform>-<sha12 of its conda-lock.yml, else environment.yml>
-    check-vendor   the vendored app files match vendor/VENDORED.txt
+    env-id         the env's id: <platform>-<sha12 of its locks (conda-lock.yml + requirements.txt),
+                   else of its environment.yml>
+    check-vendor   the vendored app files and mirrored app constants match
+                   vendor/VENDORED.txt (and, with --app, the app checkout)
+    vendor-consts  VENDORED.txt's constant lines with the values read from an app checkout
 
 ``unpacked_size`` follows the app's definition (lock_model.Artifact): the sum
 of the apparent sizes of the archive's regular files, every path counted,
@@ -18,15 +21,17 @@ Directories and symlinks count 0.
 """
 
 import argparse
+import ast
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
 import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePath, PurePosixPath
 from typing import Dict, Iterable, List, Optional
 
 HERE = Path(__file__).resolve().parent
@@ -37,13 +42,17 @@ UPSTREAM = "MachineEditor/DeepFaceLab-MVE@6e366896e0119e26600c3fcebc914e6fc54fcf
 DEFAULT_BASE_URL = "https://runtimes.recaster.studio"
 # R2 key prefix for everything this pipeline publishes
 KEY_PREFIX = "dfl"
+# Tags the release run publishes (release.yml meta job; open_lock_pr.sh)
+RELEASE_TAG_RE = re.compile(r"rdfl-[0-9]{4}\.[0-9]{1,2}\.[0-9]+(-rc[0-9]+)?")   # fullmatch
 # Fixed member metadata for the weights tar, so the same weights give the same bytes
 WEIGHTS_MTIME = 1724371200   # 2024-08-23, the upstream commit the weights come from
 CHUNK = 1 << 20
 
 # Mirrors runtime_manager.EXTRACT_SIZE_FACTOR / EXTRACT_SIZE_SLACK and
 # CONDA_UNPACK_TIMEOUT_S; locator._REQUIRED_SOURCE_DIRS / _WEIGHTS_FILE /
-# _MIN_WEIGHTS_BYTES; runner._DROP_ENV_KEYS / _DROP_ENV_PREFIXES.
+# _MIN_WEIGHTS_BYTES; runner._DROP_ENV_KEYS / _DROP_ENV_PREFIXES. Recorded with
+# their app locations in vendor/VENDORED.txt ("const:" lines) and checked by
+# check-vendor.
 EXTRACT_SIZE_FACTOR = 1.1
 EXTRACT_SIZE_SLACK = 1 << 20
 CONDA_UNPACK_TIMEOUT_S = 900
@@ -320,15 +329,27 @@ def install_check(lock_path: Path, platform: str, artifacts_dir: Path, root: Pat
 # Lock
 # ---------------------------------------------------------------------------
 
-def env_spec(repo_root: Path, platform: str) -> Path:
-    """The file an env is built from: the conda-lock once committed, else the environment.yml."""
+def env_spec_files(repo_root: Path, platform: str) -> List[Path]:
+    """The files an env is built from: its conda-lock (+ hashed pip requirements) once committed,
+    else the environment.yml."""
     env_dir = repo_root / "envs" / platform
     lock = env_dir / "conda-lock.yml"
-    return lock if lock.is_file() else env_dir / "environment.yml"
+    if not lock.is_file():
+        return [env_dir / "environment.yml"]
+    pip_lock = env_dir / "requirements.txt"
+    return [lock, pip_lock] if pip_lock.is_file() else [lock]
 
 
 def env_id(repo_root: Path, platform: str) -> str:
-    return f"{platform}-{sha256_file(env_spec(repo_root, platform))[:12]}"
+    """<platform>-<sha12>: the spec's sha256, or with two lock files the sha256 of their
+    ``<sha256>  <name>`` lines, so the id changes with either lock and nothing else."""
+    files = env_spec_files(repo_root, platform)
+    if len(files) == 1:
+        digest = sha256_file(files[0])
+    else:
+        lines = "".join(f"{sha256_file(f)}  {f.name}\n" for f in files)
+        digest = hashlib.sha256(lines.encode("utf-8")).hexdigest()
+    return f"{platform}-{digest[:12]}"
 
 
 def read_bridge_version(repo_root: Path) -> dict:
@@ -348,6 +369,12 @@ def object_key(role: str, tag: str, name: str) -> str:
 
 
 _CONTENT_TYPES = {"tar.gz": "application/gzip", "tar": "application/x-tar", "zip": "application/zip"}
+PROVENANCE_CONTENT_TYPE = "text/plain; charset=utf-8"
+
+
+def measure_provenance(path: Path) -> dict:
+    """A provenance file (explicit.txt / pip-freeze.txt) published next to its env."""
+    return {"name": path.name, "sha256": sha256_file(path), "size": path.stat().st_size}
 
 
 def make_lock(*, tag: str, commit: str, repo: str, repo_root: Path, source: dict, weights: dict,
@@ -379,6 +406,11 @@ def make_lock(*, tag: str, commit: str, repo: str, repo_root: Path, source: dict
             if meta.get(key):
                 extra[key] = meta[key]
         env_entries[platform] = artifact("env", meta, extra)
+        # Published next to the env, listed in the manifest only (the lock schema has no field for them)
+        for prov in meta.get("provenance", []):
+            manifest.append({"role": "provenance", "key": object_key("provenance", tag, prov["name"]),
+                             "file": prov["name"], "sha256": prov["sha256"], "size": prov["size"],
+                             "content_type": PROVENANCE_CONTENT_TYPE})
 
     lock = {
         "schema": 1,
@@ -413,15 +445,115 @@ def dump_json(data, path: Path) -> None:
 # Vendored app files
 # ---------------------------------------------------------------------------
 
-def check_vendor() -> List[str]:
+CONST_PREFIX = "const:"
+
+
+class _NotConstant(Exception):
+    pass
+
+
+def _const_eval(node, names: dict):
+    """Evaluate the literal subset module-level constants use: literals, tuples, names bound
+    earlier, + - * << on them, and Path(...) / "..." (as a PurePosixPath)."""
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return tuple(_const_eval(e, names) for e in node.elts)
+    if isinstance(node, ast.Name):
+        if node.id not in names:
+            raise _NotConstant(node.id)
+        return names[node.id]
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in (
+            "Path", "PurePath", "PurePosixPath") and not node.keywords:
+        return PurePosixPath(*(_const_eval(a, names) for a in node.args))
+    if isinstance(node, ast.BinOp):
+        left, right = _const_eval(node.left, names), _const_eval(node.right, names)
+        ops = {ast.Add: lambda a, b: a + b, ast.Sub: lambda a, b: a - b, ast.Mult: lambda a, b: a * b,
+               ast.LShift: lambda a, b: a << b, ast.Div: lambda a, b: a / b}
+        if type(node.op) in ops:
+            return ops[type(node.op)](left, right)
+    raise _NotConstant(ast.dump(node)[:80])
+
+
+def app_constant(path: Path, name: str):
+    """The value of a module-level constant in an app source file, without importing it."""
+    names = {}
+    for node in ast.parse(path.read_text(encoding="utf-8"), str(path)).body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            target, value = node.targets[0].id, node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
+            target, value = node.target.id, node.value
+        else:
+            continue
+        try:
+            names[target] = _const_eval(value, names)
+        except _NotConstant:
+            names.pop(target, None)
+    if name not in names:
+        raise ReleaseError(f"{path.name}: no module-level constant {name}")
+    return names[name]
+
+
+def const_json(value):
+    """Canonical JSON-able form: tuples -> lists, paths -> posix strings."""
+    if isinstance(value, (tuple, list)):
+        return [const_json(v) for v in value]
+    if isinstance(value, PurePath):
+        return value.as_posix()
+    return value
+
+
+def _vendor_lines() -> List[str]:
+    return (VENDOR_DIR / "VENDORED.txt").read_text(encoding="utf-8").splitlines()
+
+
+def parse_const_line(line: str) -> tuple:
+    """``const: NAME  app/path.py:APP_NAME  <json>`` -> (NAME, app path, APP_NAME, value)."""
+    try:
+        _tag, name, location, raw = line.split(None, 3)
+        rel, _, app_name = location.partition(":")
+        return name, rel, app_name, json.loads(raw)
+    except ValueError as e:
+        raise ReleaseError(f"bad VENDORED.txt line: {line!r}") from e
+
+
+def vendor_const_lines(app: Path) -> List[str]:
+    """VENDORED.txt's const lines, with each value re-read from the app checkout."""
+    out = []
+    for line in _vendor_lines():
+        if line.startswith(CONST_PREFIX):
+            name, rel, app_name, _old = parse_const_line(line)
+            value = const_json(app_constant(app / rel, app_name))
+            out.append(f"{CONST_PREFIX} {name}  {rel}:{app_name}  {json.dumps(value)}")
+    return out
+
+
+def check_vendor(app: Optional[Path] = None) -> List[str]:
+    """Vendored files match their sha256s; each mirrored constant matches this module's value.
+    With ``app``, the vendored files and the recorded constants must also match that checkout."""
     problems = []
-    for line in (VENDOR_DIR / "VENDORED.txt").read_text(encoding="utf-8").splitlines():
+    for line in _vendor_lines():
         if not line.strip() or line.startswith("#") or line.startswith("app_commit:"):
             continue
-        digest, rel = line.split()[:2]
+        if line.startswith(CONST_PREFIX):
+            name, rel, app_name, recorded = parse_const_line(line)
+            if name not in globals():
+                problems.append(f"{name}: not defined in release_tools.py")
+            elif const_json(globals()[name]) != recorded:
+                problems.append(f"{name}: release_tools.py has {const_json(globals()[name])!r}, "
+                                f"VENDORED.txt records {recorded!r} from {rel}:{app_name}")
+            if app is not None:
+                actual = const_json(app_constant(app / rel, app_name))
+                if actual != recorded:
+                    problems.append(f"{name}: the app's {rel}:{app_name} is {actual!r}, "
+                                    f"VENDORED.txt records {recorded!r}")
+            continue
+        digest, rel, app_rel = line.split()[:3]
         actual = sha256_file(VENDOR_DIR / rel)
         if actual != digest:
             problems.append(f"{rel}: sha256 {actual}, VENDORED.txt says {digest}")
+        if app is not None and sha256_file(app / app_rel) != actual:
+            problems.append(f"{rel} differs from the app's {app_rel} (run sync_vendor.sh)")
     return problems
 
 
@@ -440,6 +572,8 @@ def main(argv=None) -> int:
     p = sub.add_parser("measure")
     p.add_argument("archive")
     p.add_argument("--extra", help="JSON object merged into the output (env metadata)")
+    p.add_argument("--provenance", action="append", default=[],
+                   help="a provenance file published next to this artifact (repeatable)")
     p.add_argument("--out", required=True)
 
     p = sub.add_parser("build-weights")
@@ -471,7 +605,11 @@ def main(argv=None) -> int:
     p.add_argument("--platform", required=True)
     p.add_argument("--repo-root", default=str(HERE.parent.parent))
 
-    sub.add_parser("check-vendor")
+    p = sub.add_parser("check-vendor")
+    p.add_argument("--app", help="a Recaster checkout to compare the mirrored constants against")
+
+    p = sub.add_parser("vendor-consts")
+    p.add_argument("--app", required=True)
 
     args = parser.parse_args(argv)
     try:
@@ -479,6 +617,8 @@ def main(argv=None) -> int:
             result = measure(Path(args.archive))
             if args.extra:
                 result.update(json.loads(args.extra))
+            if args.provenance:
+                result["provenance"] = [measure_provenance(Path(f)) for f in args.provenance]
             dump_json(result, Path(args.out))
             print(json.dumps(result, indent=2))
         elif args.cmd == "build-weights":
@@ -498,12 +638,14 @@ def main(argv=None) -> int:
         elif args.cmd == "env-id":
             print(env_id(Path(args.repo_root), args.platform))
         elif args.cmd == "check-vendor":
-            problems = check_vendor()
+            problems = check_vendor(Path(args.app) if args.app else None)
             for problem in problems:
                 print(problem, file=sys.stderr)
             if problems:
                 return 1
-            print("vendored app files match VENDORED.txt")
+            print("vendored app files and constants match VENDORED.txt" + (f" and {args.app}" if args.app else ""))
+        elif args.cmd == "vendor-consts":
+            print("\n".join(vendor_const_lines(Path(args.app))))
     except ReleaseError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

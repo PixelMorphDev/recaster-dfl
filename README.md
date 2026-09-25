@@ -32,10 +32,12 @@ Each tagged release is expected to produce three artifacts:
 
 ## Running it directly
 
-1. Create an environment from the spec for your platform:
-   `conda env create -f envs/<platform>/environment.yml`, where the
-   platforms are `linux-x86_64-cuda12`, `macos-arm64-metal` and
-   `windows-x86_64-cuda11`.
+1. Create an environment for your platform. On `linux-x86_64-cuda12` and
+   `macos-arm64-metal`, build it from the locks, as the release CI does:
+   `micromamba create -n recaster-dfl -f envs/<platform>/conda-lock.yml`, then
+   `python -m pip install --require-hashes --no-deps -r envs/<platform>/requirements.txt`
+   in that env. On `windows-x86_64-cuda11` (no locks yet), use
+   `conda env create -f envs/windows-x86_64-cuda11/environment.yml`.
 2. Put the four weight files in `facelib/`. They are byte-identical to
    upstream at `6e36689`, so either extract the weights release artifact or
    restore them from git history, e.g.

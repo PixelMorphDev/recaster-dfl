@@ -1,8 +1,11 @@
-# recaster-dfl runtime environment: macos-arm64-metal
+# recaster-dfl runtime environment: macos-arm64-metal, conda side
 #
-# Single source of truth for this platform's DFL/TensorFlow env. The
-# exact, hash-pinned resolution lives next to this file in conda-lock.yml
-# (generated from this spec; not committed yet, see CHANGES.md).
+# Single source of truth for this platform's DFL/TensorFlow env, in two
+# parts that are built together (release.yml):
+#   environment.yml -> conda-lock.yml     conda packages (exact builds, sha256)
+#   requirements.in -> requirements.txt   PyPI packages (exact versions, hashes),
+#                                         installed with pip --require-hashes --no-deps
+# Regenerate both locks with envs/lock.sh after editing either spec.
 # Upstream's root environment.yml and requirements-*.txt are kept only as
 # upstream history and are NOT used by Recaster.
 #
@@ -10,8 +13,8 @@
 # opencv-python-headless, torch. Recaster's ONNX stack lives in a separate
 # interpreter.
 #
-# NOTE: the tensorflow 2.16.2 + tensorflow-metal 1.2.0 pairing is
-# UNVERIFIED. The release CI smoke must pass before this env ships.
+# NOTE: the tensorflow 2.16.2 + tensorflow-metal 1.2.0 pairing is verified
+# only by the release CI smoke (CPU, probe, S3FD/2DFAN); see requirements.in.
 name: recaster-dfl
 channels:
   - conda-forge
@@ -29,12 +32,4 @@ dependencies:
   - tqdm
   - pyyaml             # models/ModelBase.py (module-level import)
   - jsonschema         # models/ModelBase.py (module-level import)
-  - pip
-  - pip:
-      - tensorflow==2.16.2
-      - tensorflow-metal==1.2.0
-      - opencv-python==4.10.0.84       # non-headless (highgui for DFL windows)
-      - ffmpeg-python                  # mainscripts/VideoEd.py
-      - tf2onnx                        # DFM export (lazy import). 1.17.0 imports and converts a graph
-                                       # with TF 2.16.2 + numpy 1.26.4 here; same pins as linux
-      - tensorboardX                   # optional training logs (lazy import)
+  - pip                # installs requirements.txt

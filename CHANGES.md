@@ -21,10 +21,44 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
   objects. Pull requests and manual runs are dry runs with no secrets and
   no upload. `ci/release/open_lock_pr.sh` opens the Recaster lock PR from a
   published run.
-- `tests/test_release_tools.py`, `tests/test_publish_r2.py`: release tooling
-  tests (`unpacked_size`, weights determinism, lock validation, install
-  emulation, vendored files, and no-overwrite R2 publishing against a fake
-  `aws` cli).
+- Hash-pinned env builds (design 4.6). Each built platform
+  (`linux-x86_64-cuda12`, `macos-arm64-metal`) now has
+  `envs/<platform>/conda-lock.yml` (conda-lock 3.0.4, exact conda-forge
+  builds with sha256) and `requirements.txt` (the PyPI closure from
+  `requirements.in`, exact versions with hashes, minus what conda provides).
+  release.yml builds from them with micromamba and
+  `pip install --require-hashes --no-deps --only-binary :all:` + `pip check`.
+  `envs/lock.sh` regenerates both from `environment.yml` / `requirements.in`.
+  The formerly floating PyPI deps are pinned at the versions the first dry run
+  resolved: `ffmpeg-python==0.2.0`, `tf2onnx==1.17.0`, `tensorboardX==2.6.5`.
+  The env id is `<platform>-<sha12>` over both lock files.
+- Each env's `explicit.txt` and `pip-freeze.txt` are published next to it
+  (`dfl/<tag>/rdfl-env-<env_id>.{explicit,pip-freeze}.txt`) and listed in the
+  publish manifest.
+- `ci/release/env_info.py` fails the build if any installed package is
+  AGPL-licensed (pip `License` / `License-Expression` / classifiers, conda
+  `conda-meta` `license`).
+- `ci/release/lock_pr_checks.py`: `open_lock_pr.sh` now accepts only a
+  successful tag-push run of `release.yml` in this repo for an
+  `rdfl-YYYY.M.P[-rcN]` tag, a lock for that tag and commit with no
+  `DRY RUN` comment and URLs only under `dfl/<tag>/` and `dfl/weights/`, and
+  requires the public `dfl/<tag>/dfl_runtime.lock.json` to be byte-identical
+  to the run's artifact.
+- `ci/release/publish_r2.py` refuses a manifest `file` that isn't a bare name,
+  a `key` other than `dfl/<tag>/<file>` or `dfl/weights/<file>`, and a lock
+  tag that isn't a release tag. The publish job fails (instead of skipping)
+  when the R2 secrets are missing on a tag run, and checks every manifest
+  object and the public lock after upload.
+- `ci/release/vendor/VENDORED.txt` records the app constants
+  `release_tools.py` mirrors (`const:` lines, with their app locations);
+  `check-vendor` compares them, and `check-vendor --app` / `sync_vendor.sh`
+  also compare the vendored files and constants with an app checkout.
+- `tests/test_release_tools.py`, `tests/test_publish_r2.py`,
+  `tests/test_lock_pr_checks.py`, `tests/test_env_info.py`,
+  `tests/test_env_locks.py`: release tooling tests (`unpacked_size`, weights
+  determinism, lock validation, install emulation, vendored files and
+  constants, no-overwrite R2 publishing and manifest validation against a
+  fake `aws` cli, lock PR checks, the AGPL guard, and the committed env locks).
 
 - `recaster_bridge/` (protocol 1, bridge 1.0.0): a file-based JSON-lines
   side channel for running DFL out of process. Active only when

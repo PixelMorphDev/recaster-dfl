@@ -124,6 +124,79 @@ class PublishTests(unittest.TestCase):
         for secret in ("acct0123456789", "AKIDTEST", "s3cr3t-value"):
             self.assertNotIn(secret, out)
 
+    def _fake_prelude(self, code):
+        """Run ``code`` in the fake aws cli before its normal dispatch."""
+        aws = self.tmp / "bin" / "aws"
+        src = aws.read_text()
+        marker = 'if args[:2] == ["s3api", "head-object"]:'
+        aws.write_text(src.replace(marker, code + "\n" + marker, 1))
+
+    def _set_entry(self, index, **fields):
+        entries = json.loads(self.manifest.read_text())
+        entries[index].update(fields)
+        rt.dump_json(entries, self.manifest)
+
+    def _nothing_uploaded(self):
+        log = self.store / "calls.log"
+        return not log.exists() or " s3 cp " not in log.read_text()
+
+    def test_head_403_fails_closed_without_upload(self):
+        self._fake_prelude('if args[:2] == ["s3api", "head-object"]:\n'
+                           '    sys.stderr.write("An error occurred (403) when calling the HeadObject operation: Forbidden\\n")\n'
+                           '    sys.exit(254)')
+        result = self.publish()
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("head-object", result.stderr)
+        self.assertTrue(self._nothing_uploaded())
+
+    def test_existing_object_without_sha_metadata_is_refused(self):
+        obj = self.store / "objects" / "dfl/weights/w.tar"
+        obj.parent.mkdir(parents=True)
+        obj.write_bytes(b"weights")          # same size and bytes, but no sha256 metadata
+        obj.with_name(obj.name + ".meta").write_text("{}")
+        result = self.publish()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("refusing to overwrite", result.stderr)
+        self.assertEqual(obj.with_name(obj.name + ".meta").read_text(), "{}")
+
+    def test_manifest_file_must_be_a_bare_name(self):
+        outside = self.tmp / "outside.bin"
+        outside.write_bytes(b"x")
+        for name in ("../outside.bin", str(outside), "sub/a.tar.gz", "..", ".", "", ".hidden", "a\\b"):
+            with self.subTest(name=name):
+                self._set_entry(0, file=name, key=f"dfl/rdfl-2026.10.0/{name}", size=1,
+                                sha256=rt.sha256_file(outside))
+                result = self.publish()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("not a bare file name", result.stderr)
+                self.assertTrue(self._nothing_uploaded())
+
+    def test_manifest_key_must_be_under_the_tag_or_weights(self):
+        for key in ("dfl/rdfl-2026.9.0/a.tar.gz", "dfl/a.tar.gz", "other/rdfl-2026.10.0/a.tar.gz",
+                    "dfl/rdfl-2026.10.0/b.tar.gz", "dfl/rdfl-2026.10.0/../weights/a.tar.gz",
+                    "dfl/rdfl-2026.10.0/sub/a.tar.gz", "/dfl/rdfl-2026.10.0/a.tar.gz"):
+            with self.subTest(key=key):
+                self._set_entry(0, key=key)
+                result = self.publish()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("is not one of", result.stderr)
+                self.assertTrue(self._nothing_uploaded())
+
+    def test_weights_key_and_tag_key_both_accepted(self):
+        self._set_entry(0, key="dfl/weights/a.tar.gz")
+        result = self.publish()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("dfl/weights/a.tar.gz", self._objects())
+
+    def test_lock_tag_must_be_a_release_tag(self):
+        for tag in ("rdfl-dryrun-0123456789ab", "rdfl-2026.10", "rdfl-2026.10.0-beta", "../x", None):
+            with self.subTest(tag=tag):
+                rt.dump_json({"tag": tag}, self.lock)
+                result = self.publish()
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("not a release tag", result.stderr)
+                self.assertTrue(self._nothing_uploaded())
+
     def test_masks_endpoint_on_actions(self):
         env = dict(self.env, GITHUB_ACTIONS="true")
         result = self.publish(env)

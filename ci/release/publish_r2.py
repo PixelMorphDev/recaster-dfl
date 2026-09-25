@@ -7,6 +7,10 @@ Environment: ``R2_ACCOUNT_ID``, ``AWS_ACCESS_KEY_ID``, ``AWS_SECRET_ACCESS_KEY``
 (the workflow maps the ``release`` environment's R2 secrets onto them) and
 ``R2_BUCKET``. Nothing here prints a credential or the account endpoint.
 
+The manifest is checked before anything else: the lock's tag must be a
+release tag (``rdfl-YYYY.M.P[-rcN]``), every ``file`` a bare file name in
+``--dist``, and every ``key`` ``dfl/<tag>/<file>`` or ``dfl/weights/<file>``.
+
 Objects are never overwritten. For each manifest entry the file's size and
 sha256 are checked first, then ``head-object``:
 
@@ -26,7 +30,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from release_tools import KEY_PREFIX, sha256_file  # noqa: E402
+from release_tools import KEY_PREFIX, RELEASE_TAG_RE, sha256_file  # noqa: E402
 
 CACHE_CONTROL = "public, max-age=31536000, immutable"
 
@@ -61,6 +65,22 @@ def _redact(text, endpoint):
 def _matches(meta, sha256, size):
     return (meta.get("ContentLength") == size
             and (meta.get("Metadata") or {}).get("sha256") == sha256)
+
+
+def check_manifest(manifest, tag):
+    """Refuse anything that could write outside the release's keys or read outside --dist."""
+    if not isinstance(tag, str) or not RELEASE_TAG_RE.fullmatch(tag):
+        raise PublishError(f"the lock's tag {tag!r} is not a release tag (rdfl-YYYY.M.P[-rcN])")
+    if not isinstance(manifest, list) or not manifest:
+        raise PublishError("the manifest lists no artifacts")
+    for entry in manifest:
+        name = entry.get("file")
+        if (not isinstance(name, str) or name in ("", ".", "..") or "/" in name or "\\" in name
+                or name.startswith(".") or Path(name).name != name):
+            raise PublishError(f"manifest file {name!r} is not a bare file name")
+        allowed = (f"{KEY_PREFIX}/{tag}/{name}", f"{KEY_PREFIX}/weights/{name}")
+        if entry.get("key") not in allowed:
+            raise PublishError(f"manifest key {entry.get('key')!r} for {name} is not one of {', '.join(allowed)}")
 
 
 def put(bucket, key, path, sha256, size, content_type, endpoint):
@@ -105,6 +125,7 @@ def main(argv=None) -> int:
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
     dist = Path(args.dist)
     try:
+        check_manifest(manifest, lock.get("tag"))
         # Check every local file before the first upload
         for entry in manifest:
             path = dist / entry["file"]

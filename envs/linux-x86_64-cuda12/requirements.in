@@ -1,0 +1,12 @@
+# recaster-dfl runtime environment: linux-x86_64-cuda12, PyPI side (top-level, exact pins)
+#
+# Compiled by envs/lock.sh into requirements.txt: the full hashed closure
+# minus what conda-lock.yml already provides (numpy, h5py, ...), constrained
+# to the conda-lock versions. release.yml installs it with
+# `pip install --require-hashes --no-deps --only-binary :all:`.
+# Versions are the ones the 2026-09-25 dry run resolved (run 36112746264).
+tensorflow[and-cuda]==2.16.2   # pulls nvidia-cudnn-cu12 8.9.7.29
+opencv-python==4.10.0.84       # non-headless (highgui for DFL windows)
+ffmpeg-python==0.2.0           # mainscripts/VideoEd.py
+tf2onnx==1.17.0                # DFM export (lazy import); onnx 1.19.0, protobuf 4.25.x
+tensorboardX==2.6.5            # optional training logs (lazy import)
