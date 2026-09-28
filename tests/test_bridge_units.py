@@ -39,7 +39,7 @@ def _events(path):
 
 class VersionTests(unittest.TestCase):
     def test_version_file(self):
-        self.assertEqual(read_version(), {"protocol": 1, "bridge": "1.2.0"})
+        self.assertEqual(read_version(), {"protocol": 1, "bridge": "1.3.0"})
         self.assertEqual(PROTOCOL, 1)
 
     def test_run_dir_needs_flag_and_existing_dir(self):
@@ -236,6 +236,16 @@ class ControlReaderTests(unittest.TestCase):
         self.assertEqual(self.reader.invalid_lines, 1)
         codes = [e["code"] for e in _events(self.events)]
         self.assertEqual(codes, ["unknown_command", "unsupported_command", "bad_command"])
+
+    def test_training_handler_receives_commands_without_affecting_other_runs(self):
+        received = []
+        self.reader.set_command_handler(received.append)
+        self._append('{"v":1,"seq":1,"cmd":"save"}\n'
+                     '{"v":1,"seq":2,"cmd":"pause"}\n'
+                     '{"v":1,"seq":3,"cmd":"resume"}\n')
+        self.reader.poll_once()
+        self.assertEqual([cmd["cmd"] for cmd in received], ["save", "pause", "resume"])
+        self.assertEqual(_events(self.events), [])
 
     def test_heartbeat_watchdog_and_alive(self):
         self.now[0] = 50

@@ -73,6 +73,7 @@ def trainerThread (s2c, c2s, e,
                     start_tensorboard=False,
                     config_training_file=None,
                     gen_snapshot=False,
+                    pause_gate=None,
                     **kwargs):
     while True:
         try:
@@ -179,6 +180,26 @@ def trainerThread (s2c, c2s, e,
                     c2s.put({'op': 'show', 'previews': previews})
                 e.set()  # Set the GUI Thread as Ready
 
+            def handle_commands():
+                """Process controls at an iteration boundary (also while paused)."""
+                while not s2c.empty():
+                    item = s2c.get()
+                    op = item['op']
+                    if op == 'save':
+                        model_save()
+                        c2s.put({'op': 'saved', 'iter': model.get_iter()})
+                    elif op == 'backup':
+                        model_backup()
+                    elif op == 'preview':
+                        if is_reached_goal:
+                            model.pass_one_iter()
+                        send_preview()
+                    elif op == 'close':
+                        if item.get('save', True):
+                            model_save()
+                        return True
+                return False
+
             if model.get_target_iter() != 0:
                 if is_reached_goal:
                     io.log_info('Model already trained to target iteration. You can use preview.')
@@ -194,6 +215,10 @@ def trainerThread (s2c, c2s, e,
             execute_programs = [[x[0], x[1], time.time()] for x in execute_programs]
 
             for i in itertools.count(0, 1):
+                if pause_gate is not None and pause_gate.wait_until_resumed(handle_commands):
+                    break
+                if handle_commands():
+                    break
                 if not debug:
                     cur_time = time.time()
 
@@ -305,23 +330,7 @@ def trainerThread (s2c, c2s, e,
                 if debug:
                     time.sleep(0.005)
 
-                while not s2c.empty():
-                    item = s2c.get()
-                    op = item['op']
-                    if op == 'save':
-                        model_save()
-                    elif op == 'backup':
-                        model_backup()
-                    elif op == 'preview':
-                        if is_reached_goal:
-                            model.pass_one_iter()
-                        send_preview()
-                    elif op == 'close':
-                        model_save()
-                        i = -1
-                        break
-
-                if i == -1:
+                if handle_commands():
                     break
 
             model.finalize()
@@ -329,6 +338,7 @@ def trainerThread (s2c, c2s, e,
         except Exception as e:
             print('Error: %s' % (str(e)))
             traceback.print_exc()
+            c2s.put({'op': 'error', 'message': str(e)})
         break
     c2s.put ( {'op':'close'} )
 

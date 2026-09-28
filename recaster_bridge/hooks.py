@@ -49,6 +49,7 @@ from .protocol import EventWriter
 EXIT_CANCELLED = 130
 REAP_TERM_GRACE_S = 2.0   # SIGTERM -> this long -> SIGKILL
 REAP_KILL_WAIT_S = 1.0    # SIGKILL -> this long for the members to go
+TRAIN_STOP_GRACE_S = 120.0  # let a large model finish its current step and save
 _REAP_POLL_S = 0.1
 _PS_TIMEOUT_S = 5
 
@@ -221,6 +222,8 @@ class BridgeSession:
         self._done = False
         self._exit_code: Optional[int] = None
         self._stopping = False
+        self._training_stop = None
+        self._graceful_stop_requested = False
         self._stop_thread: Optional[threading.Thread] = None
         self.control = ControlReader(self.run_dir / CONTROL_FILE, self.writer,
                                      on_stop=self.request_stop, heartbeat_s=heartbeat_s)
@@ -258,7 +261,7 @@ class BridgeSession:
         return True
 
     def request_stop(self, save: bool, reason: str) -> None:
-        """Stop the run. Non-training ops have nothing to save: cancel now.
+        """Stop a training run cooperatively; cancel other ops immediately.
 
         Called from the control thread. ``done{cancelled}`` is written and the
         event file closed before any worker is signalled, so a crash that a
@@ -272,8 +275,32 @@ class BridgeSession:
             if self._stopping or self._done:
                 return
             self._stopping = True
-            self._stop_thread = threading.current_thread()
+            training_stop = self._training_stop
+            if training_stop is None:
+                self._stop_thread = threading.current_thread()
         self.writer.emit("state", state="stopping", reason=reason)
+        if training_stop is not None:
+            self._graceful_stop_requested = True
+            training_stop(save)
+            watchdog = threading.Timer(TRAIN_STOP_GRACE_S, self._training_stop_expired)
+            watchdog.daemon = True
+            watchdog.start()
+            return
+        self._force_stop()
+
+    def set_training_stop(self, callback) -> None:
+        """Register a callback that queues a graceful trainer close/save."""
+        self._training_stop = callback
+
+    def _training_stop_expired(self) -> None:
+        if self.is_done:
+            return
+        self.writer.emit("warning", code="training_stop_timeout",
+                         message="Training did not stop within 120 seconds; forcing shutdown")
+        self._stop_thread = threading.current_thread()
+        self._force_stop()
+
+    def _force_stop(self) -> None:
         self.finish("cancelled", EXIT_CANCELLED)
         self.control.halt()
         self.writer.close()  # nothing is written after done, even while the group is reaped
@@ -339,7 +366,10 @@ class BridgeSession:
             code_int = code
         else:
             code_int = 1  # exit("message") prints it and exits 1
-        self.finish("ok" if code_int == 0 else "error", code_int)
+        if code_int == 0 and self._graceful_stop_requested:
+            self.finish("cancelled", EXIT_CANCELLED)
+        else:
+            self.finish("ok" if code_int == 0 else "error", code_int)
         self.control.halt()
         self.writer.close()
 

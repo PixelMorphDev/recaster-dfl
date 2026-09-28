@@ -177,7 +177,13 @@ if __name__ == "__main__":
                   'reduce_clutter'           : arguments.reduce_clutter
                   }
         from mainscripts import Trainer
-        Trainer.main(**kwargs)
+        from recaster_bridge.hooks import current_session
+        bridge_session = current_session()
+        if bridge_session is not None:
+            from recaster_bridge.train import run_headless_training
+            run_headless_training(bridge_session, Trainer.trainerThread, kwargs)
+        else:
+            Trainer.main(**kwargs)
 
     p = subparsers.add_parser( "train", help="Trainer")
     p.add_argument('--training-data-src-dir', required=True, action=fixPathAction, dest="training_data_src_dir", help="Dir of extracted SRC faceset.")
