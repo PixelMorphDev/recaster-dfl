@@ -114,6 +114,15 @@ class WorkflowGuardTests(unittest.TestCase):
             self.assertIn(flag, installs[0])
 
 
+class LockPrScriptTests(unittest.TestCase):
+    def test_tests_committed_gitlink_before_push_and_targets_recaster(self):
+        script = (ROOT / "ci" / "release" / "open_lock_pr.sh").read_text(encoding="utf-8")
+        self.assertLess(script.index('git commit -m'), script.index('-m pytest tests/unit/dfl/test_lock_bundled_valid.py'))
+        self.assertLess(script.index('-m pytest tests/unit/dfl/test_lock_bundled_valid.py'),
+                        script.index('git push -u origin "$branch"'))
+        self.assertIn('gh pr create --repo PixelMorphDev/recaster', script)
+
+
 # setup-micromamba's cache enable flags (each has a <flag>-key input)
 MICROMAMBA_CACHE_FLAGS = ("cache-downloads", "cache-environment")
 # Anything that differs between a tag push and a dry run

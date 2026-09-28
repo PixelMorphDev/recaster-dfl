@@ -46,8 +46,12 @@ never be overwritten or deleted. A partially published tag stays that way.
 | Tag | Commit | Run | Result |
 |-----|--------|-----|--------|
 | `rdfl-2026.10.0-rc1` | `a320d9d` | [36125530274](https://github.com/PixelMorphDev/recaster-dfl/actions/runs/36125530274) | Failed in both env jobs (setup-micromamba cache inputs). lock and publish skipped; nothing on R2. Used, not published. |
+| `rdfl-2026.10.0-rc2` | `5623fd4` | [36128480446](https://github.com/PixelMorphDev/recaster-dfl/actions/runs/36128480446) | Published bridge 1.0.0. |
+| `rdfl-2026.10.0-rc3` | `a5054f3` | [36191420287](https://github.com/PixelMorphDev/recaster-dfl/actions/runs/36191420287) | Published bridge 1.1.0 with process-group cleanup. |
+| `rdfl-2026.10.0-rc4` | `2120c6f` | [36203034196](https://github.com/PixelMorphDev/recaster-dfl/actions/runs/36203034196) | Published bridge 1.2.0 with context answers. |
+| `rdfl-2026.10.0-rc5` | `919f59d` | [36498860558](https://github.com/PixelMorphDev/recaster-dfl/actions/runs/36498860558) | Published bridge 1.3.0 with headless training controls. |
 
-**Next tag: `rdfl-2026.10.0-rc2`.**
+**Next tag: `rdfl-2026.10.0-rc6`**, if another release candidate is needed.
 
 ## Tag-day checklist
 
@@ -62,10 +66,9 @@ never be overwritten or deleted. A partially published tag stays that way.
    and `R2_SECRET_ACCESS_KEY` are set. Check the names only, never print the
    values.
 4. The tag isn't already used: `git ls-remote --tags origin 'rdfl-*'` and the
-   table above. For this release that is `rdfl-2026.10.0-rc2`.
+   table above. Use the next unused tag; never reuse a failed one.
 5. Tag the rehearsed main commit and push only that tag:
-   `git tag -a rdfl-2026.10.0-rc2 <sha> -m "rdfl-2026.10.0-rc2"` and
-   `git push origin rdfl-2026.10.0-rc2`.
+   `git tag -a <tag> <sha> -m "<tag>"` and `git push origin <tag>`.
 6. Watch the run. When `lock` is green, read `dfl_runtime.lock.json` in the
    run summary (tag, commit, both envs, no dry-run comment), then approve the
    `publish` deployment.
@@ -80,6 +83,8 @@ never be overwritten or deleted. A partially published tag stays that way.
    tag (step 9) and tag the next `-rcN` instead.
 8. Add the tag to the table above (PR), then open the Recaster lock PR from
    the run: `ci/release/open_lock_pr.sh <run-id> <recaster-checkout>`.
+   The bundled-lock test uses `python` from the active environment when
+   available, then `python3`; set `RECASTER_APP_PYTHON` to override it.
 9. If the tag run fails, leave the tag alone, record it in the table as used,
    fix on a PR (its dry run is the rehearsal) and go back to step 1 with the
    next `-rcN`.
