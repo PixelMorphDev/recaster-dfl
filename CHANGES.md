@@ -6,6 +6,19 @@ Changes made by PixelMorph LLC to MachineEditor/DeepFaceLab-MVE at
 
 ## Unreleased (2026-09-25): recaster_bridge v1, release pipeline
 
+### Training bridge 1.3.0 (REC-190)
+
+- `main.py train` uses a headless adapter when the Recaster bridge is active.
+  It keeps DFL's model and sample generators in the child process and sends
+  iteration, preview, loss history, save and state events to the app.
+- Training controls now support save, backup, preview, pause, resume and a
+  cooperative stop with optional model save. Pause takes effect at an
+  iteration boundary; a stop can be processed while paused. A 120-second
+  watchdog forces shutdown if the trainer does not finish its save.
+- `recaster_bridge/VERSION` is 1.3.0 (protocol remains 1). The app gates
+  runner training on this version; the packaged runtime must be updated
+  before enabling training by default.
+
 ### Added
 
 - `.github/workflows/release.yml` and `ci/release/`: the runtime release

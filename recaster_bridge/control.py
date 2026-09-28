@@ -1,9 +1,9 @@
 # Part of recaster-dfl (GPL-3.0). Copyright (C) 2026 PixelMorph LLC. See CHANGES.md.
 """Control channel: polls ``control.jsonl`` by byte offset on a daemon thread.
 
-Handles ``heartbeat``, ``stop`` and ``answer``. Training commands (save,
-backup, preview, pause, ...) arrive with the training slice; until then they
-are acknowledged with a ``warning`` event. Unknown commands are ignored with
+Handles ``heartbeat``, ``stop`` and ``answer``. A training run registers a
+handler for save, backup, preview and pause/resume; other operations receive
+an unsupported-command warning. Unknown commands are ignored with
 a warning too. Also runs the heartbeat watchdog (no control line for
 ``heartbeat_s`` seconds -> stop), the parent watch (with a heartbeat set:
 the parent pid changed, i.e. the caller died and this process was
@@ -26,6 +26,7 @@ _NOT_YET_SUPPORTED = frozenset({"save", "backup", "preview", "next_preview", "pr
 class ControlReader(threading.Thread):
     def __init__(self, path: Path, writer: EventWriter, *,
                  on_stop: Callable[[bool, str], None],
+                 on_command: Optional[Callable[[dict], None]] = None,
                  heartbeat_s: float = 0, alive_s: float = 15, poll_s: float = 0.1,
                  parent_poll_s: float = 1.0, clock: Callable[[], float] = time.monotonic,
                  getppid: Callable[[], int] = os.getppid):
@@ -33,6 +34,7 @@ class ControlReader(threading.Thread):
         self.path = Path(path)
         self._writer = writer
         self._on_stop = on_stop
+        self._on_command = on_command
         self._heartbeat_s = heartbeat_s
         self._alive_s = alive_s
         self._poll_s = poll_s
@@ -55,6 +57,10 @@ class ControlReader(threading.Thread):
 
     def halt(self) -> None:
         self._halt.set()
+
+    def set_command_handler(self, handler: Callable[[dict], None]) -> None:
+        """Install the training command handler before starting the train loop."""
+        self._on_command = handler
 
     def wait_answer(self, prompt_id: str, timeout: Optional[float]) -> Tuple[bool, Any]:
         """Block until the caller answers ``prompt_id`` (timeout None = forever)."""
@@ -145,8 +151,11 @@ class ControlReader(threading.Thread):
             self._writer.emit("warning", code="bad_command", message=f"key not allowed: {cmd.get('key')!r}")
             return
         if name in _NOT_YET_SUPPORTED:
-            self._writer.emit("warning", code="unsupported_command",
-                              message=f"'{name}' is not supported for this operation")
+            if self._on_command is None:
+                self._writer.emit("warning", code="unsupported_command",
+                                  message=f"'{name}' is not supported for this operation")
+            else:
+                self._on_command(cmd)
             return
         if name not in CONTROL_COMMANDS:
             self._writer.emit("warning", code="unknown_command", message=f"unknown command {name!r}")
