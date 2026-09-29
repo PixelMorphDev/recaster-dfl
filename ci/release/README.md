@@ -83,8 +83,12 @@ never be overwritten or deleted. A partially published tag stays that way.
    tag (step 9) and tag the next `-rcN` instead.
 8. Add the tag to the table above (PR), then open the Recaster lock PR from
    the run: `ci/release/open_lock_pr.sh <run-id> <recaster-checkout>`.
-   The bundled-lock test uses `python` from the active environment when
-   available, then `python3`; set `RECASTER_APP_PYTHON` to override it.
+   The helper commits the lock and submodule pointer locally, then runs the
+   full app DFL unit suite before pushing. A test failure removes its local
+   branch and restores the previous checkout and submodule. Tests use
+   `python` from the active environment when available, then `python3`;
+   set `RECASTER_APP_PYTHON` to override it. The app's bundled-release
+   assertions read the tag from the lock, so a new tag needs no test edit.
 9. If the tag run fails, leave the tag alone, record it in the table as used,
    fix on a PR (its dry run is the rehearsal) and go back to step 1 with the
    next `-rcN`.

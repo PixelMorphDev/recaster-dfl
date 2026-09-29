@@ -117,9 +117,12 @@ class WorkflowGuardTests(unittest.TestCase):
 class LockPrScriptTests(unittest.TestCase):
     def test_tests_committed_gitlink_before_push_and_targets_recaster(self):
         script = (ROOT / "ci" / "release" / "open_lock_pr.sh").read_text(encoding="utf-8")
-        self.assertLess(script.index('git commit -m'), script.index('-m pytest tests/unit/dfl/test_lock_bundled_valid.py'))
-        self.assertLess(script.index('-m pytest tests/unit/dfl/test_lock_bundled_valid.py'),
+        self.assertLess(script.index('git commit -m'), script.index('-m pytest tests/unit/dfl -q'))
+        self.assertLess(script.index('-m pytest tests/unit/dfl -q'),
                         script.index('git push -u origin "$branch"'))
+        self.assertIn('git switch -f "$starting_branch"', script)
+        self.assertIn('git submodule update --init -- "$sub"', script)
+        self.assertIn('git branch -D "$branch"', script)
         self.assertIn('gh pr create --repo PixelMorphDev/recaster', script)
 
 
